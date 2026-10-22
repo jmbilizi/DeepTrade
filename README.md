@@ -1,1 +1,1 @@
-# DeepCoin
+# DeepTrade
