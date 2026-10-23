@@ -1,0 +1,4 @@
+# Normalize line endings so hooks and configs are identical on every OS
+* text=auto eol=lf
+*.png binary
+*.jpg binary
