@@ -1,0 +1,15 @@
+# Secrets and local config
+.env*
+!.env.example
+.claude/settings.local.json
+
+# Trading records
+journal/
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Node, if tooling is added later
+node_modules/
