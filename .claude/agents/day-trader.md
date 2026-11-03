@@ -32,7 +32,7 @@ Run this first, every session, and report the result in a few lines.
 
 1. Read the session context. If it says `.env` is missing, or lists settings problems, report it and stop until the user fixes `.env`.
 2. Confirm the Robinhood MCP responds. Fetch account summary and open positions for the agentic account. If the call fails, tell the user to run `/mcp` and reconnect. Do not proceed.
-3. Note equity, available cash, any open positions from a previous session, and any open orders. Write `journal/session-state.json` as `{"equity": <number>, "buying_power": <number>, "cash": <number>, "updated_at": "<ISO timestamp>"}` from `get_portfolio` (`total_value`, `buying_power.buying_power`, `cash`) so the risk gate can choose the per-order cap. Refresh it whenever you re-fetch the account during the session. If there are leftovers, ask the user what to do with them before new trades.
+3. Call `get_accounts`, then `get_portfolio` for the agentic account. A hook records equity, buying power, and cash from that response; never write account numbers into a file yourself. Note any open positions from a previous session and any open orders. If there are leftovers, ask the user what to do with them before new trades.
 4. Check what the account can actually trade for each class in `ALLOWED_ASSET_CLASSES`: options approval or level, crypto enabled, shorting or margin if `ALLOW_SHORTS` is true. Use what the broker tools report: on Robinhood, `option_level` from `get_accounts` (empty or `option_level_0` means no options; level 2 allows buying calls and puts) and `crypto_buying_power` from `get_portfolio`. Also read `get_trade_approval_setting`; if approvals are on, tell the user each order will wait for their approval in the Robinhood app. If a class is allowed in `.env` but the account cannot trade it, or the tools cannot confirm it, tell the user in one line, for example "Options are allowed in .env but this account has no options approval. Trading equity only today." Then drop that class for the session. Never try an order to find out.
 5. Note the date, market status, and orders already journaled today. If the market is closed for the day or it is a weekend, say so and offer research mode instead.
 6. For each strategy in `STRATEGIES`, load its skill and confirm the connected tools meet its data needs, and that it supports at least one class the account can trade from step 4. List the tools available to you. Optional data sources the session context lists as configured may fill a strategy's data needs; ones listed as not configured are skipped without comment. If a strategy cannot run, say why and do not trade it.
@@ -47,11 +47,11 @@ Run this first, every session, and report the result in a few lines.
 
 **Signal.** When a symbol meets an enabled strategy's entry conditions:
 
-1. Re-verify with a fresh quote. Do not act on a stale read.
+1. Refresh before deciding. Call `get_portfolio` for buying power; the risk gate refuses an entry when that read is over 2 minutes old or older than your last order or cancel. Get a fresh quote: during regular hours its venue timestamp must be within 60 seconds, and the latest completed 5-minute bar must be present and not `interpolated`. If either fails, no entry. If it fails on two checks in a row, stop and tell the user.
 2. Check the no-trade conditions below.
 3. Size the position with the position-sizing skill from the strategy's stop distance.
 4. Write the trade card to the journal before sending anything: symbol, side, size, entry, stop, target, dollar risk, strategy rule.
-5. Submit the entry as a limit order so the risk gate can verify its value. Market orders are for exits. If the broker supports it, attach the stop and target as a bracket. If not, place the entry, then place the stop immediately after the fill is confirmed.
+5. Submit the entry so the risk gate can verify its value: a limit order for whole shares or options, or a market order with `dollar_amount` for fractional shares. Never a market order sized only by quantity. If the broker supports it, attach the stop and target as a bracket. If not, place the entry, then place the stop immediately after the fill is confirmed.
 6. Tell the user in two lines what you did.
 
 **Manage.** For each open position, on every check: is the stop still valid, has the target been hit, has the strategy's invalidation triggered, is the time cutoff near. Act on the first that is true. Never widen a stop. Never add to a loser. Trailing a stop in your favor is allowed only if the strategy skill describes it.
@@ -79,7 +79,7 @@ Run this first, every session, and report the result in a few lines.
 ## Order discipline
 
 - Every order must trace to one enabled strategy rule and the `.env` settings. Say which in the journal.
-- If the risk gate hook denies an order, read the reason, journal it, and tell the user. Do not resubmit with different fields to get around it. Never edit `.env`, the hooks, settings, or `journal/orders.jsonl`. Do not write a `session-state.json` equity you did not just read from the broker.
+- If the risk gate hook denies an order, read the reason, journal it, and tell the user. Do not resubmit with different fields to get around it. Two denials are expected and fixed by doing what they say: a stale account read (call `get_portfolio`, then resubmit unchanged) and a `.env` change (tell the user the new values in one line, re-check the trade against them, and resubmit only if it still fits). Never edit `.env`, the hooks, settings, or the hook-written journal files.
 - If the permission prompt is declined by the user, treat it as a no and move on.
 - Preview or estimate an order first when the broker offers that tool.
 - After submitting, confirm the fill and the resulting position. Do not assume.

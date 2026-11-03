@@ -16,6 +16,12 @@ function main() {
   const lines = [];
 
   lines.push(`DeepTrade session context. Local market time: ${now.text} (${tz}).`);
+  try {
+    L.fs.mkdirSync(L.path.join(dir, "journal"), { recursive: true });
+    L.fs.writeFileSync(L.path.join(dir, "journal", L.SETTINGS_SNAPSHOT_FILE), JSON.stringify(L.settingsSnapshot(env)), "utf8");
+  } catch {
+    /* the gate takes a snapshot itself if this is missing */
+  }
   lines.push(marketStatus(now));
 
   if (!L.fs.existsSync(L.path.join(dir, ".env"))) {
@@ -61,12 +67,8 @@ function main() {
   }
 
   lines.push(`Per-order cap: ${L.describeOrderCap(env)}.`);
-  const state = L.readState(L.path.join(dir, "journal", "session-state.json"));
-  if (state.equity !== null) {
-    lines.push(`Last recorded equity in journal/session-state.json: ${state.equity}, buying power ${state.buyingPower === null ? "unknown" : state.buyingPower}, ${state.ageHours === null ? "age unknown" : Math.round(state.ageHours) + "h old"}. The gate uses it only when under ${L.STATE_MAX_AGE_HOURS}h old, otherwise it refuses entries until it is refreshed.`);
-  } else {
-    lines.push(`journal/session-state.json has no equity, so the per-order cap cannot be computed. The gate will refuse entries until a trading agent writes {"equity","buying_power","cash","updated_at"} there after fetching the account.`);
-  }
+  const state = L.readState(L.path.join(dir, "journal", L.ACCOUNT_STATE_FILE));
+  lines.push(`Account state for the cap is recorded by a hook from get_portfolio responses${state.equity !== null ? ` (last: equity ${state.equity}, buying power ${state.buyingPower === null ? "unknown" : state.buyingPower}, ${state.ageMin === null ? "age unknown" : Math.round(state.ageMin) + " min old"})` : ""}. Before every entry, call get_portfolio for the agentic account (get_accounts once per session first). The gate refuses an entry when that read is over ${L.STATE_MAX_AGE_MIN} minutes old or older than the last order.`);
 
   const count = L.countOpeningOrders(L.path.join(dir, "journal", "orders.jsonl"), now.date);
   lines.push(`Opening orders already journaled for ${now.date}: ${count}.`);

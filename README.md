@@ -99,7 +99,7 @@ Without a key, the server still starts but offers no tools, so nothing errors. C
 | `DEEPTRADE_ALLOW_SHORTS=true` | Not a refusal by itself: lets strategies short and makes the gate cap plain sells as entries. `DEEPTRADE_GATE_SELLS` still works as an alias. |
 | `DEEPTRADE_TIMEZONE` | Not a limit. Market timezone for the time rules, default `America/New_York`. |
 
-The per-order cap needs your equity and buying power. The agent writes them to `journal/session-state.json` at the start of each session, and the gate refuses entries if that file is missing or more than 20 hours old.
+The per-order cap needs your equity and buying power. A hook records them from Robinhood's own `get_portfolio` response for your agentic account, so the agent cannot misstate them. The gate refuses an entry when that read is over 2 minutes old or older than the last order, since every fill changes buying power. If you edit `.env` during a session, the gate refuses the next entry once and tells the agent the new values.
 
 **Trading plan settings.** Also in `.env`, followed by the agent rather than the hook: `DEEPTRADE_STRATEGIES`, `DEEPTRADE_RISK_PER_TRADE_PCT`, `DEEPTRADE_MAX_POSITIONS`, `DEEPTRADE_DAILY_LOSS_PCT`, `DEEPTRADE_FLAT_BY`, `DEEPTRADE_CHECK_EVERY_MIN`, `DEEPTRADE_FRACTIONAL_SHARES`, and the scan filters. `DEEPTRADE_ALLOWED_ASSET_CLASSES` is in order of preference: for each signal the agent uses the first class that both the strategy and your account support. If your account cannot trade a class you allowed, for example no options approval, the agent tells you at session start and skips it. At session start the hook reports every setting with defaults filled in, and flags typos and contradictions such as a flat-by time before the last entry time.
 

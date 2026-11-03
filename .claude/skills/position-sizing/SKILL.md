@@ -28,7 +28,7 @@ only usd set    -> cap = max_order_usd if buying_power >= max_order_usd, else eq
 otherwise       -> cap = equity * pct / 100
 ```
 
-The session context states which rule is active. The hook applies the same rule from `journal/session-state.json`, so write that file before sizing.
+The session context states which rule is active. The risk gate applies the same rule to the equity and buying power a hook records from your latest `get_portfolio` call, which must be under 2 minutes old and newer than your last order. Call it right before sizing.
 
 ## Shares
 

@@ -5,7 +5,12 @@
 const fs = require("fs");
 const path = require("path");
 
-const STATE_MAX_AGE_HOURS = 20;
+// Account state (equity, buying power) is recorded by the journal hook from
+// the broker's own responses. Entries need a read this recent, and newer than
+// the last order, because every fill and cancel changes buying power.
+const STATE_MAX_AGE_MIN = 2;
+const ACCOUNT_STATE_FILE = "account-state.json";
+const AGENTIC_ACCOUNTS_FILE = "agentic-accounts.json";
 const DEFAULT_TZ = "America/New_York";
 
 // ---------- IO ----------
@@ -78,19 +83,21 @@ const DEFAULT_MAX_ORDER_PCT = 10;
 //   only percent  -> that percent of equity
 //   both          -> the lower of the two
 // Returns { value, how } or { value: null, missing } when the account state it
-// needs is missing or stale.
-function orderCap(env, state) {
+// needs is missing, stale, or older than the last order (lastOrder, ms).
+function orderCap(env, state, lastOrder) {
   const usd = num(env.DEEPTRADE_MAX_ORDER_USD);
   const pctSet = num(env.DEEPTRADE_MAX_ORDER_PCT);
   const pct = pctSet !== null ? pctSet : DEFAULT_MAX_ORDER_PCT;
   const pctLabel = pctSet !== null ? "DEEPTRADE_MAX_ORDER_PCT" : "default";
   const missing = !state || state.equity === null
-    ? "journal/session-state.json has no usable equity"
+    ? "no account read is recorded yet"
     : state.stale
-      ? `journal/session-state.json is ${Math.round(state.ageHours)}h old (limit ${STATE_MAX_AGE_HOURS}h)`
-      : usd !== null && pctSet === null && state.buyingPower === null
-        ? "journal/session-state.json has no buying_power"
-        : null;
+      ? `the last account read is ${state.ageMin.toFixed(1)} minutes old (limit ${STATE_MAX_AGE_MIN})`
+      : lastOrder !== null && lastOrder !== undefined && state.updatedMs !== null && state.updatedMs < lastOrder
+        ? "an order or cancel was sent after the last account read, so buying power has changed"
+        : usd !== null && pctSet === null && state.buyingPower === null
+          ? "the last account read has no buying power"
+          : null;
   if (missing) return { value: null, missing };
   const pctCap = (pct / 100) * state.equity;
   const pctHow = `${pct}% of equity $${state.equity.toFixed(2)} (${pctLabel})`;
@@ -137,6 +144,29 @@ const OPTIONAL_SOURCES = [
 ];
 
 // Plan settings with defaults filled in. Each value is { value, isDefault }.
+// Settings the agent was told about at session start, so a mid-session .env
+// edit can be surfaced before the next entry. API keys are never included.
+const SETTINGS_SNAPSHOT_FILE = "settings-snapshot.json";
+
+function settingsSnapshot(env) {
+  const out = {};
+  for (const k of GUARDRAIL_KEYS) out[k] = env[k] === undefined ? "" : String(env[k]).trim();
+  for (const [k, v] of Object.entries(planSettings(env))) out[k] = v.value;
+  for (const s of OPTIONAL_SOURCES) if (s.planKey) out[s.planKey] = env[s.planKey] === undefined ? "" : String(env[s.planKey]).trim();
+  return out;
+}
+
+function settingsChanges(oldSnap, newSnap) {
+  const keys = new Set([...Object.keys(oldSnap || {}), ...Object.keys(newSnap)]);
+  const out = [];
+  for (const k of keys) {
+    const a = (oldSnap || {})[k] === undefined ? "" : oldSnap[k];
+    const b = newSnap[k] === undefined ? "" : newSnap[k];
+    if (a !== b) out.push(`${k}: ${a === "" ? "unset" : a} -> ${b === "" ? "unset" : b}`);
+  }
+  return out;
+}
+
 function planSettings(env) {
   const out = {};
   for (const [k, d] of Object.entries(PLAN_DEFAULTS)) {
@@ -488,11 +518,87 @@ function readState(file) {
     const equity = num(s.equity);
     const bp = num(s.buying_power);
     const buyingPower = bp !== null ? bp : num(s.cash);
-    const updated = Date.parse(s.updated_at || "");
-    const ageHours = Number.isFinite(updated) ? (Date.now() - updated) / 36e5 : Infinity;
-    return { equity, buyingPower, stale: ageHours > STATE_MAX_AGE_HOURS, ageHours };
+    const updatedMs = Date.parse(s.updated_at || "");
+    const ageMin = Number.isFinite(updatedMs) ? (Date.now() - updatedMs) / 6e4 : Infinity;
+    return { equity, buyingPower, updatedMs: Number.isFinite(updatedMs) ? updatedMs : null, ageMin, stale: ageMin > STATE_MAX_AGE_MIN };
   } catch {
-    return { equity: null, buyingPower: null, stale: false, ageHours: null };
+    return { equity: null, buyingPower: null, updatedMs: null, ageMin: null, stale: false };
+  }
+}
+
+// Time of the most recent order or cancel in orders.jsonl, in ms, or null.
+function lastOrderMs(file) {
+  let last = null;
+  for (const r of readJournal(file)) {
+    const t = Date.parse(r.ts || "");
+    if (Number.isFinite(t) && (last === null || t > last)) last = t;
+  }
+  return last;
+}
+
+// ---------- account state from broker responses ----------
+
+function parseMaybeJson(v, depth, visit) {
+  if (depth > 8 || v === null || v === undefined) return;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s.startsWith("{") || s.startsWith("[")) {
+      try {
+        parseMaybeJson(JSON.parse(s), depth + 1, visit);
+      } catch {
+        /* not JSON */
+      }
+    }
+    return;
+  }
+  if (typeof v !== "object") return;
+  visit(v);
+  for (const x of Object.values(v)) parseMaybeJson(x, depth + 1, visit);
+}
+
+// Account numbers the broker marks as tradable by this agent (get_accounts).
+function collectAgenticAccounts(response) {
+  const out = new Set();
+  parseMaybeJson(response, 0, (o) => {
+    if (o.agentic_allowed === true && (typeof o.account_number === "string" || typeof o.account_number === "number")) out.add(String(o.account_number));
+  });
+  return [...out];
+}
+
+// Equity, buying power, and cash from a portfolio response (get_portfolio).
+function collectPortfolio(response) {
+  let found = null;
+  parseMaybeJson(response, 0, (o) => {
+    if (found || !("total_value" in o) || !("buying_power" in o)) return;
+    const bp = o.buying_power && typeof o.buying_power === "object" ? num(o.buying_power.buying_power) : num(o.buying_power);
+    const equity = num(o.total_value);
+    if (equity !== null && bp !== null) found = { equity, buying_power: bp, cash: num(o.cash) };
+  });
+  return found;
+}
+
+// Called by the journal hook on every broker read. Records the agentic account
+// list from get_accounts (agentic-accounts.json), and the portfolio only when it
+// is for that account (account-state.json). Two files, each written whole, so
+// parallel tool calls cannot overwrite each other's result.
+function recordAccountState(file, toolTailName, toolInput, response) {
+  const acctFile = path.join(path.dirname(file), AGENTIC_ACCOUNTS_FILE);
+  if (/^get_accounts$/i.test(toolTailName)) {
+    const accts = collectAgenticAccounts(response);
+    if (accts.length) fs.writeFileSync(acctFile, JSON.stringify(accts), "utf8");
+    return;
+  }
+  if (/^get_portfolio$/i.test(toolTailName)) {
+    let known = [];
+    try {
+      known = JSON.parse(fs.readFileSync(acctFile, "utf8")).map(String);
+    } catch {
+      return; // no get_accounts yet: record nothing, the gate refuses entries
+    }
+    const acct = String((toolInput && toolInput.account_number) || "");
+    if (!acct || !known.includes(acct)) return;
+    const p = collectPortfolio(response);
+    if (p) fs.writeFileSync(file, JSON.stringify({ ...p, updated_at: new Date().toISOString() }), "utf8");
   }
 }
 
@@ -519,7 +625,15 @@ function redact(v, depth = 0) {
 }
 
 module.exports = {
-  STATE_MAX_AGE_HOURS,
+  STATE_MAX_AGE_MIN,
+  ACCOUNT_STATE_FILE,
+  SETTINGS_SNAPSHOT_FILE,
+  settingsSnapshot,
+  settingsChanges,
+  lastOrderMs,
+  recordAccountState,
+  collectPortfolio,
+  collectAgenticAccounts,
   DEFAULT_TZ,
   GUARDRAIL_KEYS,
   PLAN_DEFAULTS,

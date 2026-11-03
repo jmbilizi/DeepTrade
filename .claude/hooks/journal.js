@@ -39,6 +39,16 @@ function main() {
       /* best effort; the gate refuses unresolved option orders */
     }
   }
+
+  // Record equity and buying power straight from the broker's response, so the
+  // risk gate never depends on numbers the agent wrote.
+  if (kind === "read") {
+    try {
+      L.recordAccountState(L.path.join(jdir, L.ACCOUNT_STATE_FILE), L.toolTail(toolName), input.tool_input, input.tool_response);
+    } catch {
+      /* best effort; the gate refuses entries without a fresh read */
+    }
+  }
   if (kind !== "order" && kind !== "cancel") return;
 
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
