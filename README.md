@@ -27,7 +27,7 @@ The model decides. Code checks. Every opening order passes through a determinist
 ## Prerequisites
 
 - [Claude Code](https://code.claude.com) 2.1.295 or newer, signed in.
-- Node.js 18 or newer on your PATH. The hooks are plain Node scripts. If Node is missing, the risk gate cannot run and order calls are blocked rather than allowed.
+- Node.js 18 or newer on your PATH. The hooks are plain Node scripts. The optional Unusual Whales server needs Node 20; the agent tells you if you configure it on an older version. If Node is missing, the risk gate cannot run and order calls are blocked rather than allowed.
 - A Robinhood individual account in good standing that has access to Agentic Trading. It is rolling out gradually, so not every account is eligible yet.
 - A desktop. Robinhood's agent authentication flow has been reported to work only from a desktop browser, not a phone.
 
@@ -51,6 +51,20 @@ The model decides. Code checks. Every opening order passes through a determinist
    claude --agent day-trader
    ```
    The agent runs its pre-session checklist, builds a watchlist, and starts working. It will ask before placing each order.
+
+## Optional: Unusual Whales
+
+Robinhood is the only required connection. If you have an [Unusual Whales API](https://unusualwhales.com/public-api) plan, the agent can also use its options flow, dark pool, GEX, candles, and earnings data.
+
+1. Buy an API plan at [unusualwhales.com/pricing?product=api](https://unusualwhales.com/pricing?product=api) and copy your key from the [API dashboard](https://unusualwhales.com/dashboard/api). `.env.example` explains each plan and what the data adds for the agents.
+2. Put your key and plan in `.env`:
+   ```bash
+   UNUSUAL_WHALES_API_KEY=your-key
+   DEEPTRADE_UNUSUAL_WHALES_PLAN=basic      # starter, basic, or advanced
+   ```
+3. Restart Claude Code. The `unusual-whales` server in `.mcp.json` picks up the key. Node 20 or newer is needed for it.
+
+Without a key, the server still starts but offers no tools, so nothing errors. Claude Code asks once to approve each project MCP server; approving `unusual-whales` without a key is harmless. The key never appears in `.mcp.json` or on a command line, and trading agents are blocked from reading `.env`.
 
 ## Three layers of control
 
@@ -109,7 +123,8 @@ The percent cap needs to know your equity. The agent writes it to `journal/sessi
 | `.claude/hooks/lib.js` | Shared classifier and parsers used by the hooks. |
 | `.claude/settings.json` | Wires the project-wide hooks and allows `sleep`, journal writes, and web search without prompts. |
 | `tests/hooks.test.js` | Regression suite for the hooks. Run with `node tests/hooks.test.js`. |
-| `.mcp.json` | Declares the Robinhood Trading MCP server. No secrets inside. |
+| `.mcp.json` | Declares the Robinhood Trading MCP server and optional data servers. No secrets inside. |
+| `.claude/hooks/optional-mcp.js` | Starts an optional MCP server only when its key is set in `.env`. |
 
 ## Customize
 
@@ -128,6 +143,7 @@ Everything is plain markdown and small scripts.
 - The opening range breakout strategy needs 5-minute bars and VWAP. If no connected tool provides them, the agent is instructed to say so and not trade it.
 - No paper mode is known to exist for Robinhood agentic accounts. Start with a small balance.
 - US market holidays are not detected by the session hook.
+- The file guard blocks trading agents from reading `.env` by name through Read, Grep, and the shell. A shell command that hides the name, such as a wildcard, is not caught by the guard and relies on Claude Code's permission prompt, which asks before every shell command except `sleep`.
 
 ## Contributing
 

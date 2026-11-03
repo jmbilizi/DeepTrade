@@ -43,6 +43,21 @@ function main() {
     const p = Object.entries(plan).map(([k, v]) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${v.value}${v.isDefault ? " (default)" : ""}`);
     lines.push(`Trading plan from .env, followed by the agent: ${p.join(", ")}.`);
     lines.push("This context is the complete trading plan. Do not read .env directly; it may hold API keys.");
+    const src = L.OPTIONAL_SOURCES.map((s) => {
+      const on = Boolean((env[s.key] || "").trim() || (process.env[s.key] || "").trim());
+      const tier = (env[s.planKey] || "").trim().toLowerCase();
+      return on
+        ? `${s.name} configured (mcp__${s.server}__* tools${tier ? `, plan ${tier}` : `, plan unknown: ask the user to set ${s.planKey}`})`
+        : `${s.name} not configured (${s.key} unset; continue without it)`;
+    });
+    lines.push(`Optional data sources: ${src.join("; ")}.`);
+    const major = Number(String(process.versions.node).split(".")[0]);
+    for (const s of L.OPTIONAL_SOURCES) {
+      const on = Boolean((env[s.key] || "").trim() || (process.env[s.key] || "").trim());
+      if (on && s.minNode && major < s.minNode) {
+        lines.push(`Node version problem. Tell the user: ${s.name} is configured but needs Node ${s.minNode} or newer, and this machine has Node ${process.versions.node}. Its tools will not load until they upgrade Node. Everything else works on this version.`);
+      }
+    }
     const problems = checkSettings(dir, env, plan);
     if (problems.length) lines.push(`Settings problems. Report these to the user before trading: ${problems.join(" ")}`);
   }
@@ -66,7 +81,11 @@ function main() {
 // Catch settings that contradict each other or point at nothing.
 function checkSettings(dir, env, plan) {
   const out = [];
-  const known = new Set([...L.GUARDRAIL_KEYS, ...Object.keys(L.PLAN_DEFAULTS)]);
+  const known = new Set([...L.GUARDRAIL_KEYS, ...Object.keys(L.PLAN_DEFAULTS), ...L.OPTIONAL_SOURCES.map((s) => s.planKey)]);
+  for (const s of L.OPTIONAL_SOURCES) {
+    const tier = (env[s.planKey] || "").trim().toLowerCase();
+    if (tier && !s.plans.includes(tier)) out.push(`${s.planKey}=${tier} is not one of ${s.plans.join(", ")}.`);
+  }
   for (const k of Object.keys(env)) {
     if (k.startsWith("DEEPTRADE_") && !known.has(k)) out.push(`${k} is not a known setting (typo?) and is ignored.`);
   }

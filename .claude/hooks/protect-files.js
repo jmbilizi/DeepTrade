@@ -4,7 +4,9 @@
 // trading agent cannot loosen its own limits. A normal `claude` session in the
 // repo is not affected, which keeps the hooks and config editable by people.
 //
-// Matches Edit, Write, NotebookEdit, and Bash. For Bash the rule is simple:
+// Matches Edit, Write, NotebookEdit, Read, Grep, Glob, and Bash. Reads are
+// refused only for secret files (.env and variants, not .env.example).
+// For Bash the rule is simple:
 // a command that mentions a protected path is allowed only when every part of
 // it is a known read-only program and nothing is redirected. Anything else
 // touching those paths is refused. Claude Code's own permission prompt remains
@@ -24,6 +26,16 @@ const PROTECTED = [
   /^journal\/orders\.jsonl$/,
   /^journal\/tools-seen\.txt$/,
 ];
+
+// Files that hold secrets. Trading agents may not even read them; the session
+// context already gives them every setting they need.
+const SECRET = /^\.env($|\.(?!example$))/;
+const SECRET_HINT = /\.env(?:\.[A-Za-z0-9_-]+)?(?![A-Za-z0-9_])/g;
+
+function mentionsSecret(cmd) {
+  const hits = String(cmd).match(SECRET_HINT) || [];
+  return hits.some((h) => h.toLowerCase() !== ".env.example");
+}
 
 const PATH_HINT = /(\.env\b|\.mcp\.json|claude\.md|\.claude[\\/]+(settings|hooks|agents)|journal[\\/]+(orders\.jsonl|tools-seen\.txt))/i;
 
@@ -55,16 +67,27 @@ function main() {
 
   if (tool === "Bash") {
     const cmd = String(ti.command || "");
+    if (mentionsSecret(cmd)) {
+      return deny("This shell command touches .env, which holds API keys. Trading agents may not read or change it. Every setting is already in the session context.");
+    }
     if (PATH_HINT.test(cmd) && !readOnlyCommand(cmd)) {
-      return deny("This shell command touches a protected guardrail file and is not a plain read. Trading agents may only read .env, .mcp.json, CLAUDE.md, .claude/settings*.json, .claude/hooks/, .claude/agents/, and the hook-written journal files. Tell the user what you wanted to change and why.");
+      return deny("This shell command touches a protected guardrail file and is not a plain read. Trading agents may only read .mcp.json, CLAUDE.md, .claude/settings*.json, .claude/hooks/, .claude/agents/, and the hook-written journal files. Tell the user what you wanted to change and why.");
     }
     return;
   }
 
   const raw = ti.file_path || ti.notebook_path || ti.path || "";
+  const reading = tool === "Read" || tool === "Grep" || tool === "Glob";
+  if (reading && ti.glob && mentionsSecret(ti.glob)) {
+    return deny("Searching .env is not allowed: it holds API keys. Every setting is already in the session context.");
+  }
   if (!raw) return;
   const rel = relPath(root, String(raw));
   if (rel === null) return; // outside the project, not our concern
+  if (SECRET.test(rel)) {
+    return deny(`"${rel}" is a protected guardrail file and holds API keys. Trading agents may not read or edit it. Every setting is already in the session context.`);
+  }
+  if (reading) return;
   if (PROTECTED.some((re) => re.test(rel))) {
     return deny(`"${rel}" is a protected guardrail file. Trading agents may not edit .env, .mcp.json, CLAUDE.md, .claude/settings*.json, .claude/hooks/, .claude/agents/, or the hook-written journal files. Ask the user to make the change.`);
   }
