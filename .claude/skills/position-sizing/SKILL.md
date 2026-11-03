@@ -11,7 +11,7 @@ Risk is decided first, size falls out of it. Size never comes from conviction.
 ## Inputs
 
 - `equity`: agentic account equity from the broker, fetched this session.
-- `risk_pct`: risk per trade from `config/day-trader.md`. Default 0.5%.
+- `risk_pct`: `DEEPTRADE_RISK_PER_TRADE_PCT` from the session context.
 - `entry`: planned entry price.
 - `stop`: planned stop price, from the strategy.
 - `max_order_usd`: `DEEPTRADE_MAX_ORDER_USD` from `.env`, as reported at session start. May be unset.
@@ -41,14 +41,14 @@ Then clamp, in order:
 
 1. If `notional > cap`, set `shares = cap / entry` and note that the cap, not risk, set the size.
 2. If `notional > cash`, set `shares = cash / entry`.
-3. If fractional shares are not allowed by the plan, round down to a whole number. If that gives zero, skip the trade.
+3. If `DEEPTRADE_FRACTIONAL_SHARES` is false, round down to a whole number. If that gives zero, skip the trade.
 4. If `risk_per_share` is less than 0.1% of entry, the stop is too tight to be meaningful. Skip or ask the strategy for a wider structural stop. Never size up into a tiny stop.
 
 Round fractional shares to 4 decimal places or whatever the broker accepts.
 
 ## Options contracts
 
-Only if the plan enables options.
+Only if `option` is in `DEEPTRADE_ALLOWED_ASSET_CLASSES` and the account has options approval.
 
 ```text
 risk_dollars  = equity * risk_pct / 100
@@ -61,14 +61,14 @@ If a premium stop is not defined, treat the full premium as the risk. Clamp to `
 
 ## Crypto
 
-Same as shares with fractional units allowed. Use the plan's risk percent. Spreads and fees are larger, so add them to `risk_per_share` before dividing.
+Same as shares with fractional units allowed. Use the same `risk_pct`. Spreads and fees are larger, so add them to `risk_per_share` before dividing.
 
 ## Sanity checks before sending
 
 - Dollar risk at the stop is at or below `risk_dollars`. State it.
 - Notional is at or below `cap`. State the cap and which setting produced it.
-- Opening this position does not exceed the plan's maximum concurrent positions.
-- Total open risk across positions does not exceed 2x the single-trade risk unless the plan says otherwise.
+- Opening this position does not exceed `DEEPTRADE_MAX_POSITIONS`.
+- Total open risk across positions does not exceed 2x the single-trade risk.
 
 ## Worked example
 

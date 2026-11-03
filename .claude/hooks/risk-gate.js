@@ -35,7 +35,7 @@ function main() {
   // Everything below is an order-like call.
   const haltAll = L.truthy(env.DEEPTRADE_HALT_ALL);
   const halt = L.truthy(env.DEEPTRADE_HALT);
-  const gateSells = L.truthy(env.DEEPTRADE_GATE_SELLS);
+  const gateSells = L.gateSells(env);
   const reducing = L.isReducing(toolName, toolInput, gateSells);
   const cls = L.assetClass(toolName, toolInput);
   const symbol = L.findSymbol(toolInput);

@@ -18,7 +18,7 @@ Two records exist. The hook writes one automatically. You write the other.
 
 ### Plan
 
-Written before the open. The output of the premarket-scan skill, plus the plan's key numbers for the day: equity at start, risk per trade in dollars, max positions, flat-by time, and the guardrails reported at session start.
+Written before the open. The output of the premarket-scan skill, plus the day's key numbers from the session context: equity at start, risk per trade in dollars, max positions, flat-by time, and the guardrails reported at session start.
 
 ### Trades
 
@@ -30,7 +30,7 @@ One card per trade, written **before** the entry order is sent and completed aft
 - Setup: 5m close 132.40 above ORH 132.05 (ORL 130.80, range 1.25 = 0.95%), vol 1.9x, VWAP 131.60.
 - Entry limit 132.15  Stop 130.80  Target 133.93 (ORH + 1.5 x range)  Risk/sh 1.35  Reward/sh 1.78  R:R 1.32
 - Size 3.02 sh. Risk budget allowed 14.8 sh; cap $400 (10% of $4,000 equity) bound it. Risk at stop $4.08.
-- Plan line: "Strategies enabled: opening-range-breakout"; risk 0.5%.
+- Settings: STRATEGIES includes opening-range-breakout; RISK_PER_TRADE_PCT 0.5; instrument equity (first allowed class).
 - Risk gate: passed, est $399.09 within $400.00.
 - Fill: 132.15 at 10:05:41.
 - Exit: 133.93 target at 10:52. Result +$5.38, +1.32R.
@@ -44,7 +44,7 @@ For a skipped signal:
 ```markdown
 #### 09:50 ABC — skipped
 
-- ORB short triggered at 239.80 but plan allows longs only. No trade.
+- ORB short triggered at 239.80 but DEEPTRADE_ALLOW_SHORTS is false. No trade.
 ```
 
 ### Review
@@ -54,7 +54,7 @@ Written after flat. Keep it to ten lines.
 - Trades taken, wins, losses, net result in dollars and R.
 - Rules followed or broken. Be specific. "Moved stop early on AAPL" is useful. "Could be more disciplined" is not.
 - One observation about the market that affected results.
-- One change to consider, framed as a question for the user, never applied by you. Strategy and plan edits are the user's decision.
+- One change to consider, framed as a question for the user, never applied by you. Strategy and `.env` edits are the user's decision.
 - Anything the user needs to act on: unsettled cash, a leftover position, a hook denial to investigate.
 
 ## Reviewing past sessions

@@ -47,6 +47,57 @@ function loadEnv(file) {
   return out;
 }
 
+// ---------- settings ----------
+// .env is the single source of truth. Guardrail keys are enforced by the risk
+// gate. Plan keys guide the agent and are reported at session start. Defaults
+// live here and nowhere else, so docs, hooks, and agents cannot drift apart.
+
+const GUARDRAIL_KEYS = [
+  "DEEPTRADE_HALT",
+  "DEEPTRADE_HALT_ALL",
+  "DEEPTRADE_ALLOWED_ASSET_CLASSES",
+  "DEEPTRADE_ALLOWED_SYMBOLS",
+  "DEEPTRADE_BLOCKED_SYMBOLS",
+  "DEEPTRADE_NO_NEW_ENTRIES_BEFORE",
+  "DEEPTRADE_NO_NEW_ENTRIES_AFTER",
+  "DEEPTRADE_MAX_ORDER_USD",
+  "DEEPTRADE_MAX_ORDER_PCT",
+  "DEEPTRADE_MAX_ORDERS_PER_DAY",
+  "DEEPTRADE_REQUIRE_KNOWN_VALUE",
+  "DEEPTRADE_ALLOW_SHORTS",
+  "DEEPTRADE_GATE_SELLS", // legacy alias of DEEPTRADE_ALLOW_SHORTS
+  "DEEPTRADE_TIMEZONE",
+];
+
+const PLAN_DEFAULTS = {
+  DEEPTRADE_STRATEGIES: "opening-range-breakout",
+  DEEPTRADE_RISK_PER_TRADE_PCT: "0.5",
+  DEEPTRADE_MAX_POSITIONS: "2",
+  DEEPTRADE_DAILY_LOSS_PCT: "1.5",
+  DEEPTRADE_FLAT_BY: "15:50",
+  DEEPTRADE_CHECK_EVERY_MIN: "5",
+  DEEPTRADE_FRACTIONAL_SHARES: "true",
+  DEEPTRADE_SCAN_MIN_PRICE: "10",
+  DEEPTRADE_SCAN_MIN_AVG_VOLUME: "2000000",
+};
+
+const ASSET_CLASSES = ["equity", "option", "crypto"];
+
+// Plan settings with defaults filled in. Each value is { value, isDefault }.
+function planSettings(env) {
+  const out = {};
+  for (const [k, d] of Object.entries(PLAN_DEFAULTS)) {
+    const set = env[k] !== undefined && String(env[k]).trim() !== "";
+    out[k] = { value: set ? String(env[k]).trim() : d, isDefault: !set };
+  }
+  return out;
+}
+
+// Shorts make a plain sell an entry, so the gate must cap sells too.
+function gateSells(env) {
+  return truthy(env.DEEPTRADE_ALLOW_SHORTS) || truthy(env.DEEPTRADE_GATE_SELLS);
+}
+
 // ---------- scalars ----------
 
 function truthy(v) {
@@ -319,6 +370,11 @@ function redact(v, depth = 0) {
 module.exports = {
   STATE_MAX_AGE_HOURS,
   DEFAULT_TZ,
+  GUARDRAIL_KEYS,
+  PLAN_DEFAULTS,
+  ASSET_CLASSES,
+  planSettings,
+  gateSells,
   fs,
   path,
   readStdinJson,
