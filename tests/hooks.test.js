@@ -31,7 +31,7 @@ function setState(s) {
   fs.writeFileSync(f, JSON.stringify(s));
 }
 function clearJournal() {
-  for (const f of ["orders.jsonl", "tools-seen.txt"]) {
+  for (const f of ["orders.jsonl", "tools-seen.txt", "option-ids.json"]) {
     try { fs.unlinkSync(path.join(ROOT, "journal", f)); } catch { /* absent */ }
   }
 }
@@ -89,13 +89,23 @@ expect("close_position tool passes", gate("close_position", { symbol: "TSLA" }),
 expect("sell_to_open option is NOT reducing", gate("place_option_order", { symbol: "NVDA", side: "sell_to_open", contracts: 1, limit_price: 1 }), "deny", "option order");
 
 // ---- entries ----
-expect("buy within both caps passes (pct 400 binding)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }), "context", "within the $400.00 cap");
-expect("buy over pct cap denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 130 }), "deny", "exceeds the per-order cap of $400.00");
+expect("both caps set -> lower wins (pct 400)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }), "context", "within the $400.00 cap");
+expect("both caps set -> over the lower denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 130 }), "deny", "exceeds the per-order cap of $400.00");
 expect("buy non-allowed symbol denied", gate("place_equity_order", { symbol: "AAPL", side: "buy", quantity: 1, limit_price: 1 }), "deny", "not in DEEPTRADE_ALLOWED_SYMBOLS");
 expect("buy with no symbol and allowlist set denied", gate("place_equity_order", { side: "buy", quantity: 1, limit_price: 1 }), "deny", "could not find a symbol");
 expect("nested trailing.value does not shrink estimate", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 100, limit_price: 130, trailing: { value: 2, unit: "percent" } }), "deny", "exceeds");
 expect("market order with bogus price is unknown value", gate("place_equity_order", { symbol: "NVDA", side: "buy", type: "market", quantity: 1000, price: 0.01 }), "context", "could not estimate");
 expect("market order with notional uses notional", gate("place_equity_order", { symbol: "NVDA", side: "buy", type: "market", notional: 450 }), "deny", "exceeds the per-order cap of $400.00");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDER_PCT: "" });
+setState({ equity: 4000, buying_power: 3000, cash: 3000, updated_at: NOW });
+expect("only USD, buying power covers it -> USD", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 3, limit_price: 130 }), "context", "within the $500.00 cap (DEEPTRADE_MAX_ORDER_USD; buying power");
+setState({ equity: 4000, buying_power: 300, cash: 300, updated_at: NOW });
+expect("only USD, buying power below it -> default 10% of equity", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 110 }), "deny", "because buying power $300.00 is below");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDER_USD: "", DEEPTRADE_MAX_ORDER_PCT: 5 });
+expect("only PCT -> that percent", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 110 }), "deny", "cap of $200.00 (5% of equity");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDER_USD: "", DEEPTRADE_MAX_ORDER_PCT: "" });
+expect("neither set -> default 10% of equity", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 3, limit_price: 130 }), "context", "within the $400.00 cap (10% of equity $4000.00 (default))");
+setEnv(BASE); setState({ equity: 4000, cash: 3000, updated_at: NOW });
 expect("asset_quantity key recognized", gate("place_equity_order", { symbol: "NVDA", side: "buy", asset_quantity: 5, limit_price: 130 }), "deny", "exceeds");
 
 // ---- options multiplier ----
@@ -116,9 +126,11 @@ expect("pct only + stale state -> exit still passes", gate("place_equity_order",
 setEnv({ DEEPTRADE_MAX_ORDER_USD: 500, DEEPTRADE_MAX_ORDER_PCT: 10 });
 expect("usd+pct + stale state -> deny entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "cannot be computed");
 setEnv({ DEEPTRADE_MAX_ORDER_USD: 500 }); setState(null);
-expect("usd only, no state -> fine", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "context", "DEEPTRADE_MAX_ORDER_USD");
+expect("usd only, no state -> deny (needs buying power)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "deny", "no usable equity");
 setEnv({ DEEPTRADE_HALT: "false" });
-expect("no caps -> note", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "context", "No per-order value cap");
+expect("no caps set, no state -> deny (default cap needs equity)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "deny", "no usable equity");
+// From here on, a large fresh account so the default cap does not interfere.
+setState({ equity: 1000000, buying_power: 1000000, cash: 1000000, updated_at: NOW });
 
 // ---- halt semantics ----
 setEnv({ DEEPTRADE_HALT: "true" });
@@ -144,7 +156,7 @@ const plus = (m) => { const t = (hh * 60 + mm + m + 1440) % 1440; return `${Stri
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: plus(-5) });
 expect("NO_NEW_ENTRIES_AFTER in the past denies entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_AFTER");
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: plus(5), DEEPTRADE_NO_NEW_ENTRIES_BEFORE: plus(-5) });
-expect("inside window passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "No per-order value cap");
+expect("inside window passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_BEFORE: plus(5) });
 expect("NO_NEW_ENTRIES_BEFORE in the future denies entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_BEFORE");
 
@@ -167,6 +179,27 @@ expect("1 opening order so far, cap 2 -> entry passes with 1/2", gate("place_equ
 j("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 130 }, { id: "o3" });
 expect("2 opening orders, cap 2 -> entry denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "Daily entry cap reached: 2/2");
 expect("2 opening orders, cap 2 -> exit still passes", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 1, type: "market" }), "context", "position-reducing");
+
+// ---- real Robinhood tool names and option order shape (observed 2026-11-03) ----
+for (const t of ["create_alert", "create_scan", "decline_trade_approval", "run_scan", "authenticate", "set_legend_chart_settings"]) {
+  expect(`${t} is not an order`, gate(t, {}), "silent");
+}
+expect("exercise_option is still treated as an order", gate("exercise_option", { option_id: "x", quantity: 1 }), "deny");
+setEnv({ ...BASE, DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity,option", DEEPTRADE_MAX_ORDER_USD: 1000, DEEPTRADE_MAX_ORDER_PCT: "" });
+clearJournal();
+const leg = (id, side, effect) => ({ option_id: id, side, position_effect: effect, ratio_quantity: 1 });
+expect("option legs with unseen id denied under allowlist", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "1", price: "3.20", type: "limit" }), "deny", "get_option_instruments");
+// MCP tool responses can arrive as content blocks with JSON text.
+j("get_option_instruments", { chain_symbol: "NVDA" }, [{ type: "text", text: JSON.stringify({ data: { instruments: [{ id: "id-nv", chain_symbol: "NVDA", strike_price: "130.0000" }, { id: "id-aapl", chain_symbol: "AAPL" }] } }) }]);
+check("option ids recorded from get_option_instruments", JSON.parse(fs.readFileSync(path.join(ROOT, "journal", "option-ids.json"), "utf8"))["id-nv"] === "NVDA");
+expect("resolved option entry within cap passes, x100, size from top-level quantity", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "2", price: "3.20", type: "limit" }), "context", "$640.00");
+expect("resolved option entry over cap denied", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "4", price: "3.20", type: "limit" }), "deny", "exceeds");
+expect("option on non-allowed underlying denied", gate("place_option_order", { account_number: "1", legs: [leg("id-aapl", "buy", "open")], quantity: "1", price: "1", type: "limit" }), "deny", "AAPL is not in");
+expect("sell-to-open leg is an entry, not an exit", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "sell", "open")], quantity: "5", price: "3.20", type: "limit" }), "deny", "exceeds");
+expect("sell-to-close leg is an exit even unresolved", gate("place_option_order", { account_number: "1", legs: [leg("id-unknown", "sell", "close")], quantity: "5", type: "market" }), "context", "position-reducing");
+j("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "1", price: "3.20" }, { id: "oo1" });
+const optRec = fs.readFileSync(path.join(ROOT, "journal", "orders.jsonl"), "utf8").trim().split("\n").map(JSON.parse).pop();
+check("journal records option underlying and gated entry", optRec.symbol === "NVDA" && optRec.gated === true && optRec.asset_class === "option");
 
 // ---- robustness ----
 expect("garbage stdin silent", run("risk-gate.js", "not json"), "silent");
@@ -212,6 +245,8 @@ expect("guard: Write to .claude/hooks/risk-gate.js denied", guard("Write", { fil
 expect("guard: Edit to .claude/agents/day-trader.md denied", guard("Edit", { file_path: abs(".claude/agents/day-trader.md"), old_string: "a", new_string: "b" }), "deny", "protected");
 expect("guard: Edit to .claude/settings.json denied", guard("Edit", { file_path: abs(".claude/settings.json"), old_string: "a", new_string: "b" }), "deny", "protected");
 expect("guard: Write to journal/orders.jsonl denied", guard("Write", { file_path: abs("journal/orders.jsonl"), content: "x" }), "deny", "protected");
+expect("guard: Write to journal/option-ids.json denied", guard("Write", { file_path: abs("journal/option-ids.json"), content: "{}" }), "deny", "protected");
+expect("guard: shell write to journal/option-ids.json denied", guard("Bash", { command: "echo '{}' > journal/option-ids.json" }), "deny");
 expect("guard: Write to CLAUDE.md denied (case-insensitive)", guard("Write", { file_path: abs("Claude.md"), content: "x" }), "deny", "protected");
 expect("guard: relative path .env denied", guard("Write", { file_path: ".env", content: "x" }), "deny", "protected");
 expect("guard: Write to journal/session-state.json allowed", guard("Write", { file_path: abs("journal/session-state.json"), content: "{}" }), "silent");

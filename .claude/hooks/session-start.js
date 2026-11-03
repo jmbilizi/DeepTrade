@@ -36,8 +36,6 @@ function main() {
     g.push(`allow_shorts=${L.gateSells(env)}`);
     if (env.DEEPTRADE_REQUIRE_KNOWN_VALUE) show("require_known_value", "DEEPTRADE_REQUIRE_KNOWN_VALUE");
     lines.push(`Guardrails from .env, enforced by the risk gate: ${g.join(", ")}.`);
-    const anyCap = env.DEEPTRADE_MAX_ORDER_USD || env.DEEPTRADE_MAX_ORDER_PCT || env.DEEPTRADE_MAX_ORDERS_PER_DAY;
-    if (!anyCap) lines.push("Warning: .env sets no order caps. The risk gate will only enforce the halt switch, symbols, asset classes, and time window.");
 
     const plan = L.planSettings(env);
     const p = Object.entries(plan).map(([k, v]) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${v.value}${v.isDefault ? " (default)" : ""}`);
@@ -62,13 +60,12 @@ function main() {
     if (problems.length) lines.push(`Settings problems. Report these to the user before trading: ${problems.join(" ")}`);
   }
 
-  if (env.DEEPTRADE_MAX_ORDER_PCT) {
-    const state = L.readState(L.path.join(dir, "journal", "session-state.json"));
-    if (state.equity !== null) {
-      lines.push(`Last recorded equity in journal/session-state.json: ${state.equity}, ${state.ageHours === null ? "age unknown" : Math.round(state.ageHours) + "h old"}. The percent cap uses it only when under ${L.STATE_MAX_AGE_HOURS}h old, otherwise the gate refuses entries until it is refreshed.`);
-    } else {
-      lines.push(`DEEPTRADE_MAX_ORDER_PCT is set but journal/session-state.json has no equity. The gate will refuse entries until a trading agent writes {"equity","cash","updated_at"} there after fetching the account summary.`);
-    }
+  lines.push(`Per-order cap: ${L.describeOrderCap(env)}.`);
+  const state = L.readState(L.path.join(dir, "journal", "session-state.json"));
+  if (state.equity !== null) {
+    lines.push(`Last recorded equity in journal/session-state.json: ${state.equity}, buying power ${state.buyingPower === null ? "unknown" : state.buyingPower}, ${state.ageHours === null ? "age unknown" : Math.round(state.ageHours) + "h old"}. The gate uses it only when under ${L.STATE_MAX_AGE_HOURS}h old, otherwise it refuses entries until it is refreshed.`);
+  } else {
+    lines.push(`journal/session-state.json has no equity, so the per-order cap cannot be computed. The gate will refuse entries until a trading agent writes {"equity","buying_power","cash","updated_at"} there after fetching the account.`);
   }
 
   const count = L.countOpeningOrders(L.path.join(dir, "journal", "orders.jsonl"), now.date);

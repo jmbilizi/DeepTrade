@@ -14,19 +14,21 @@ Risk is decided first, size falls out of it. Size never comes from conviction.
 - `risk_pct`: `DEEPTRADE_RISK_PER_TRADE_PCT` from the session context.
 - `entry`: planned entry price.
 - `stop`: planned stop price, from the strategy.
-- `max_order_usd`: `DEEPTRADE_MAX_ORDER_USD` from `.env`, as reported at session start. May be unset.
+- `max_order_usd`: `DEEPTRADE_MAX_ORDER_USD` from `.env`, as reported at session start. Empty unless the user set it.
 - `max_order_pct`: `DEEPTRADE_MAX_ORDER_PCT` from `.env`. May be unset.
+- `buying_power`: buying power in the agentic account, from the broker this session.
 - `cash`: available cash in the agentic account.
 
 ## Effective per-order cap
 
 ```text
-cap_usd = max_order_usd                    if set
-cap_pct = equity * max_order_pct / 100     if set
-cap     = min(cap_usd, cap_pct)            using whichever are set; no cap if neither
+pct = max_order_pct if set, else 10
+both set        -> cap = min(max_order_usd, equity * pct / 100)
+only usd set    -> cap = max_order_usd if buying_power >= max_order_usd, else equity * 10 / 100
+otherwise       -> cap = equity * pct / 100
 ```
 
-The percent cap scales with the account. A 1,000 dollar account with a 500 dollar cap and a 10% cap gets 100 per order. A 50,000 dollar account with the same settings gets 500. The hook applies the same rule, but it can only see equity if `journal/session-state.json` is current, so write that file before sizing.
+The session context states which rule is active. The hook applies the same rule from `journal/session-state.json`, so write that file before sizing.
 
 ## Shares
 
@@ -44,7 +46,7 @@ Then clamp, in order:
 3. If `DEEPTRADE_FRACTIONAL_SHARES` is false, round down to a whole number. If that gives zero, skip the trade.
 4. If `risk_per_share` is less than 0.1% of entry, the stop is too tight to be meaningful. Skip or ask the strategy for a wider structural stop. Never size up into a tiny stop.
 
-Round fractional shares to 4 decimal places or whatever the broker accepts.
+Round fractional shares to 4 decimal places or whatever the broker accepts. Robinhood accepts fractional shares only on market orders in regular hours. For a fractional size, send a market order with `dollar_amount` = shares x price, so the risk gate can check its value. For a limit order, round down to whole shares; if that gives zero, skip the trade.
 
 ## Options contracts
 
@@ -72,4 +74,4 @@ Same as shares with fractional units allowed. Use the same `risk_pct`. Spreads a
 
 ## Worked example
 
-Equity 4,000. Risk 0.5% = 20 dollars. Entry 52.40, stop 51.90, risk per share 0.50. Shares = 40. Notional 2,096. Dollar cap 500, percent cap 10% of 4,000 = 400, so cap = 400 and shares = 400 / 52.40 = 7.63. Actual risk at stop = 7.63 * 0.50 = 3.82 dollars. The percent cap, not the risk budget, is the binding limit. Report both numbers to the user so they can decide whether to change the caps.
+Equity 4,000, buying power 4,000. Risk 0.5% = 20 dollars. Entry 52.40, stop 51.90, risk per share 0.50. Shares = 40. Notional 2,096. Only a dollar cap of 500 is set and buying power covers it, so cap = 500 and shares = 500 / 52.40 = 9.54. Actual risk at stop = 9.54 * 0.50 = 4.77 dollars. With a 10% cap also set, the lower cap, 400, would win. The cap, not the risk budget, is the binding limit. Report both numbers to the user so they can decide whether to change the caps.

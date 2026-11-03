@@ -28,6 +28,17 @@ function main() {
   noteToolSeen(L.path.join(jdir, "tools-seen.txt"), toolName);
 
   const kind = L.classifyTool(toolName);
+  const optionIdsFile = L.path.join(jdir, "option-ids.json");
+
+  // Remember option contract id -> underlying so the risk gate can check the
+  // symbol of option orders, which name contracts only by id.
+  if (kind === "read" && /option/i.test(L.toolTail(toolName))) {
+    try {
+      L.saveOptionIds(optionIdsFile, L.collectOptionIds(input.tool_response));
+    } catch {
+      /* best effort; the gate refuses unresolved option orders */
+    }
+  }
   if (kind !== "order" && kind !== "cancel") return;
 
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
@@ -39,7 +50,7 @@ function main() {
     gated: kind === "order" && !reducing,
     reducing,
     asset_class: kind === "order" ? L.assetClass(toolName, toolInput) : null,
-    symbol: L.findSymbol(toolInput),
+    symbol: L.orderSymbol(toolInput, optionIdsFile).symbol,
     tool: toolName,
     session_id: input.session_id || null,
     agent_type: input.agent_type || null,

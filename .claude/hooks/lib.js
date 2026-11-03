@@ -69,6 +69,50 @@ const GUARDRAIL_KEYS = [
   "DEEPTRADE_TIMEZONE",
 ];
 
+// Per-order cap when .env sets neither DEEPTRADE_MAX_ORDER_USD nor DEEPTRADE_MAX_ORDER_PCT.
+const DEFAULT_MAX_ORDER_PCT = 10;
+
+// Per-order cap rule, shared by the risk gate and the session report.
+//   neither set   -> DEFAULT_MAX_ORDER_PCT of equity
+//   only USD      -> USD, or the default percent when buying power is below it
+//   only percent  -> that percent of equity
+//   both          -> the lower of the two
+// Returns { value, how } or { value: null, missing } when the account state it
+// needs is missing or stale.
+function orderCap(env, state) {
+  const usd = num(env.DEEPTRADE_MAX_ORDER_USD);
+  const pctSet = num(env.DEEPTRADE_MAX_ORDER_PCT);
+  const pct = pctSet !== null ? pctSet : DEFAULT_MAX_ORDER_PCT;
+  const pctLabel = pctSet !== null ? "DEEPTRADE_MAX_ORDER_PCT" : "default";
+  const missing = !state || state.equity === null
+    ? "journal/session-state.json has no usable equity"
+    : state.stale
+      ? `journal/session-state.json is ${Math.round(state.ageHours)}h old (limit ${STATE_MAX_AGE_HOURS}h)`
+      : usd !== null && pctSet === null && state.buyingPower === null
+        ? "journal/session-state.json has no buying_power"
+        : null;
+  if (missing) return { value: null, missing };
+  const pctCap = (pct / 100) * state.equity;
+  const pctHow = `${pct}% of equity $${state.equity.toFixed(2)} (${pctLabel})`;
+  if (usd === null) return { value: pctCap, how: pctHow };
+  if (pctSet !== null) {
+    return usd <= pctCap
+      ? { value: usd, how: `DEEPTRADE_MAX_ORDER_USD, lower than ${pctHow}` }
+      : { value: pctCap, how: `${pctHow}, lower than DEEPTRADE_MAX_ORDER_USD $${usd}` };
+  }
+  if (state.buyingPower >= usd) return { value: usd, how: `DEEPTRADE_MAX_ORDER_USD; buying power $${state.buyingPower.toFixed(2)} covers it` };
+  return { value: pctCap, how: `${pctHow}, because buying power $${state.buyingPower.toFixed(2)} is below DEEPTRADE_MAX_ORDER_USD $${usd}` };
+}
+
+function describeOrderCap(env) {
+  const usd = num(env.DEEPTRADE_MAX_ORDER_USD);
+  const pctSet = num(env.DEEPTRADE_MAX_ORDER_PCT);
+  if (usd !== null && pctSet !== null) return `the lower of DEEPTRADE_MAX_ORDER_USD $${usd} and ${pctSet}% of equity`;
+  if (usd !== null) return `DEEPTRADE_MAX_ORDER_USD $${usd} while buying power covers it, otherwise ${DEFAULT_MAX_ORDER_PCT}% of equity (default)`;
+  if (pctSet !== null) return `${pctSet}% of equity (DEEPTRADE_MAX_ORDER_PCT)`;
+  return `${DEFAULT_MAX_ORDER_PCT}% of equity (default; set DEEPTRADE_MAX_ORDER_USD or DEEPTRADE_MAX_ORDER_PCT to change it)`;
+}
+
 const PLAN_DEFAULTS = {
   DEEPTRADE_STRATEGIES: "opening-range-breakout",
   DEEPTRADE_RISK_PER_TRADE_PCT: "0.5",
@@ -176,8 +220,20 @@ const SAFE_PREFIX = /^(get|list|read|fetch|search|find|describe|show|lookup|revi
 // Anything that can change money or exposure.
 const MUTATING = /(order|buy|sell|trade|execut|submit|place|create|open|close|exercise|liquidat|transfer|withdraw|deposit|roll|replace|modify|amend|assign)/i;
 
+// Robinhood Trading MCP tools observed 2026-11-03 that change settings, not
+// money or exposure: alerts, scans, chart indicators, watchlists, OAuth, and
+// declining a pending trade approval. Exact names, checked before the patterns.
+const NO_MONEY_TOOLS = new Set([
+  "authenticate", "complete_authentication",
+  "create_alert", "update_alert", "delete_alert", "mark_alerts_read",
+  "create_scan", "run_scan", "update_scan_config", "update_scan_filters",
+  "add_legend_indicator", "update_legend_indicator", "remove_legend_indicator", "set_legend_chart_settings",
+  "decline_trade_approval",
+]);
+
 function classifyTool(name) {
   const tail = toolTail(name);
+  if (NO_MONEY_TOOLS.has(tail.toLowerCase())) return "read";
   if (/cancel/i.test(tail)) return "cancel";
   if (/watchlist/i.test(tail)) return "read";
   if (SAFE_PREFIX.test(tail)) return "read";
@@ -216,6 +272,85 @@ function firstNumber(obj, keyRe) {
     }
   });
   return { value: found, key: foundKey };
+}
+
+function topNumber(obj, keyRe) {
+  for (const k of Object.keys(obj || {})) {
+    if (!keyRe.test(k)) continue;
+    const n = num(obj[k]);
+    if (n !== null) return { value: n, key: k };
+  }
+  return null;
+}
+
+function optionLegs(toolInput) {
+  const legs = toolInput && toolInput.legs;
+  return Array.isArray(legs) ? legs.filter((l) => l && typeof l === "object") : [];
+}
+
+// ---------- option id -> underlying ----------
+// Robinhood option orders name contracts only by UUID. The journal hook records
+// id -> underlying from option lookups (get_option_instruments and similar) in
+// journal/option-ids.json, so the gate can check the underlying symbol.
+
+const OPTION_IDS_MAX = 5000;
+
+function collectOptionIds(response, out = {}, depth = 0) {
+  if (depth > 8 || response === null || response === undefined) return out;
+  if (typeof response === "string") {
+    const s = response.trim();
+    if (s.startsWith("{") || s.startsWith("[")) {
+      try {
+        collectOptionIds(JSON.parse(s), out, depth + 1);
+      } catch {
+        /* not JSON */
+      }
+    }
+    return out;
+  }
+  if (typeof response !== "object") return out;
+  const sym = typeof response.chain_symbol === "string" ? response.chain_symbol.trim().toUpperCase() : "";
+  const id = typeof response.option_id === "string" ? response.option_id : typeof response.id === "string" ? response.id : "";
+  if (sym && id) out[id] = sym;
+  for (const v of Object.values(response)) collectOptionIds(v, out, depth + 1);
+  return out;
+}
+
+function readOptionIds(file) {
+  try {
+    const m = JSON.parse(fs.readFileSync(file, "utf8"));
+    return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveOptionIds(file, found) {
+  if (!Object.keys(found).length) return;
+  const merged = { ...readOptionIds(file), ...found };
+  const keys = Object.keys(merged);
+  const kept = keys.length > OPTION_IDS_MAX ? Object.fromEntries(keys.slice(-OPTION_IDS_MAX).map((k) => [k, merged[k]])) : merged;
+  fs.writeFileSync(file, JSON.stringify(kept), "utf8");
+}
+
+// Symbol of an order: a symbol field, else the underlying of its option legs.
+// Returns { symbol, unresolved } where unresolved lists leg ids not yet seen,
+// or legs on different underlyings (reported as a mismatch).
+function orderSymbol(toolInput, optionIdsFile) {
+  const direct = findSymbol(toolInput);
+  if (direct) return { symbol: direct, unresolved: [] };
+  const legs = optionLegs(toolInput);
+  if (!legs.length) return { symbol: null, unresolved: [] };
+  const map = readOptionIds(optionIdsFile);
+  const syms = new Set();
+  const unresolved = [];
+  for (const l of legs) {
+    const s = map[String(l.option_id || "")];
+    if (s) syms.add(s);
+    else unresolved.push(String(l.option_id || "(no option_id)"));
+  }
+  if (unresolved.length || syms.size !== 1) return { symbol: null, unresolved: unresolved.length ? unresolved : ["legs on different underlyings"] };
+  return { symbol: [...syms][0], unresolved: [] };
 }
 
 function hasKey(obj, keyRe) {
@@ -266,6 +401,10 @@ function assetClass(toolName, toolInput) {
 // because a sell can open a short.
 function isReducing(toolName, toolInput, gateSells) {
   const tail = toolTail(toolName);
+  // Multi-leg option orders (Robinhood place_option_order): reducing only when
+  // every leg closes. A sell leg alone can open a short option.
+  const legs = optionLegs(toolInput);
+  if (legs.length) return legs.every((l) => /^close/i.test(String(l.position_effect || "")));
   let flag = false;
   walk(toolInput, (k, v) => {
     if (/^(reduce_only|close_position|closing|is_close)$/i.test(k) && truthy(v)) flag = true;
@@ -295,8 +434,9 @@ function estimateNotional(toolInput, cls) {
   }
   const orderType = (firstString(toolInput, /^(type|order_type|time_in_force_type)$/i) || "").toLowerCase();
   const market = /market/.test(orderType);
-  const qty = firstNumber(toolInput, QTY_KEY);
-  const price = firstNumber(toolInput, LIMIT_KEY);
+  // Top-level fields first, so a leg's ratio_quantity is never read as the size.
+  const qty = topNumber(toolInput, QTY_KEY) || firstNumber(toolInput, QTY_KEY);
+  const price = topNumber(toolInput, LIMIT_KEY) || firstNumber(toolInput, LIMIT_KEY);
   if (qty.value !== null && price.value !== null && !market) {
     const mult = cls === "option" || /contract/i.test(qty.key) ? 100 : 1;
     estimates.push({ value: qty.value * price.value * mult, how: mult === 100 ? `${qty.key} x ${price.key} x 100` : `${qty.key} x ${price.key}` });
@@ -346,11 +486,13 @@ function readState(file) {
   try {
     const s = JSON.parse(fs.readFileSync(file, "utf8"));
     const equity = num(s.equity);
+    const bp = num(s.buying_power);
+    const buyingPower = bp !== null ? bp : num(s.cash);
     const updated = Date.parse(s.updated_at || "");
     const ageHours = Number.isFinite(updated) ? (Date.now() - updated) / 36e5 : Infinity;
-    return { equity, stale: ageHours > STATE_MAX_AGE_HOURS, ageHours };
+    return { equity, buyingPower, stale: ageHours > STATE_MAX_AGE_HOURS, ageHours };
   } catch {
-    return { equity: null, stale: false, ageHours: null };
+    return { equity: null, buyingPower: null, stale: false, ageHours: null };
   }
 }
 
@@ -381,6 +523,9 @@ module.exports = {
   DEFAULT_TZ,
   GUARDRAIL_KEYS,
   PLAN_DEFAULTS,
+  DEFAULT_MAX_ORDER_PCT,
+  orderCap,
+  describeOrderCap,
   ASSET_CLASSES,
   OPTIONAL_SOURCES,
   planSettings,
@@ -399,6 +544,10 @@ module.exports = {
   toolTail,
   classifyTool,
   findSymbol,
+  optionLegs,
+  collectOptionIds,
+  saveOptionIds,
+  orderSymbol,
   normalizeSymbol,
   symbolAllowed,
   assetClass,

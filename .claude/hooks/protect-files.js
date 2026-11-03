@@ -25,6 +25,7 @@ const PROTECTED = [
   /^\.claude\/agents\//,
   /^journal\/orders\.jsonl$/,
   /^journal\/tools-seen\.txt$/,
+  /^journal\/option-ids\.json$/,
 ];
 
 // Files that hold secrets. Trading agents may not even read them; the session
@@ -37,7 +38,7 @@ function mentionsSecret(cmd) {
   return hits.some((h) => h.toLowerCase() !== ".env.example");
 }
 
-const PATH_HINT = /(\.env\b|\.mcp\.json|claude\.md|\.claude[\\/]+(settings|hooks|agents)|journal[\\/]+(orders\.jsonl|tools-seen\.txt))/i;
+const PATH_HINT = /(\.env\b|\.mcp\.json|claude\.md|\.claude[\\/]+(settings|hooks|agents)|journal[\\/]+(orders\.jsonl|tools-seen\.txt|option-ids\.json))/i;
 
 // Programs that only read. A command segment must start with one of these.
 const READ_ONLY = new Set(["cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "diff", "type", "get-content", "gc", "select-string", "ls", "dir", "stat", "file", "find", "sleep", "echo", "printf", "pwd", "date", "test", "true"]);
