@@ -66,8 +66,6 @@ Supports `equity` and `option`. Not `crypto`, which has no opening range. Use th
 | Entry | Limit at the mid, never above the ask |
 | Premium stop | 50% of premium paid, a hard backstop |
 
-Find contracts with `get_option_instruments` in the same session before ordering. Option orders name the contract only by id, and the risk gate learns each id's underlying from that lookup; an id it has not seen is refused while a symbol list is set.
-
 Exit the option when the underlying hits the stop, target, or an invalidation, or when the premium stop is hit, whichever comes first. Size it with the position-sizing skill, using the premium stop as the stop. If no contract passes every rule, or no tool returns the chain with bid, ask, delta, open interest, and volume, skip the option and use the next allowed class. If there is none, skip the trade.
 
 Options lose value to time decay and can lose value after a move when implied volatility drops. A correct breakout can still lose money on the option.

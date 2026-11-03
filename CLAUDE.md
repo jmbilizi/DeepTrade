@@ -30,11 +30,12 @@ Defaults in `.env.example` and strategy skills are risk limits chosen to be cons
 
 ## Conventions for contributors
 
+- Agent or skill: an agent holds only what makes it a different trader: its style, session shape and cadence, style-specific no-trade conditions, which skills it preloads, and its voice. Anything another trading agent would also need goes in a skill: preflight checks (`trading-preflight`), placing and managing orders (`order-execution`), sizing, journaling, scanning, and strategies. Broker tool names live in skills, never in agents, so a broker change touches one place. Hard rules stay here and in the hooks, numbers stay in `.env`; neither is repeated in agents or skills.
 - Agents: lowercase hyphenated names. Frontmatter needs `name` and `description`. Preload strategy skills with the `skills` field. Keep the body under 300 lines.
 - Skills: `SKILL.md` under 500 lines. Put long references and examples in sibling files and link them. Strategy skills must state entry, stop, target, invalidation, filters, the market data they require, and what the strategy is bad at.
 - Hooks: plain Node with no dependencies, so users need nothing beyond Claude Code and Node 18+. Put shared logic in `lib.js`. Read stdin JSON, write JSON to stdout, set `process.exitCode` rather than calling `process.exit()` after a write. Exit 2 only for a hard block. Never throw on malformed input. The gate fails closed on breached limits and warns the model on its own bugs.
 - Hook changes must pass `node tests/hooks.test.js` before commit. A normal `claude` session in the repo can edit hooks freely. Only sessions running a trading agent are blocked by the file guard.
-- Every new trading agent must include the same `hooks` frontmatter block as `day-trader.md` so the file guard applies to it. An agent without it can rewrite its own limits.
+- Every new trading agent must include the same `hooks` frontmatter block as `day-trader.md` so the file guard applies to it, and preload `trading-preflight`, `order-execution`, `position-sizing`, and `trade-journal`. An agent without the hooks block can rewrite its own limits.
 - Settings: every user-tunable value goes in `.env`, with its default in `lib.js` and its line in `.env.example`. Never add a second settings file or repeat a setting in markdown, so nothing can disagree. Skills and agents refer to settings by key name.
 - Strategy skills list the asset classes they support and the rules for each. Agents choose the first class in `DEEPTRADE_ALLOWED_ASSET_CLASSES` that both the strategy and the account support.
 - Never commit `.env`, `journal/`, or `.claude/settings.local.json`. `.env` holds API keys, and trading agents are blocked from reading it.

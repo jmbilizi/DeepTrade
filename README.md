@@ -112,6 +112,8 @@ The per-order cap needs your equity and buying power. A hook records them from R
 | Path | What it is |
 | --- | --- |
 | `.claude/agents/day-trader.md` | The first agent. Intraday entries and exits on a watchlist, flat by close. |
+| `.claude/skills/trading-preflight/` | Shared pre-session checks: settings, broker connection, account state, what the account can trade. |
+| `.claude/skills/order-execution/` | Shared rules for sending, confirming, and managing orders safely. |
 | `.claude/skills/opening-range-breakout/` | The first strategy. Rules, filters, stop and target logic, data it needs. |
 | `.claude/skills/position-sizing/` | Fixed-fractional risk sizing for shares, fractional shares, and contracts. |
 | `.claude/skills/premarket-scan/` | How the agent builds the day's watchlist. |
@@ -132,7 +134,7 @@ Everything is plain markdown and small scripts.
 
 - **Change the strategy.** Edit a skill under `.claude/skills/`, or copy one to a new folder and add its name to `DEEPTRADE_STRATEGIES`.
 - **Change the agent.** Edit `.claude/agents/day-trader.md`. The body is its system prompt.
-- **Add an agent.** Drop a new `.md` in `.claude/agents/`. A swing trader, an options income agent, a research-only analyst.
+- **Add an agent.** Drop a new `.md` in `.claude/agents/`, copy the `hooks` block from `day-trader.md`, and preload the shared skills. Put only what makes it a different trader in the agent; see "Agent or skill" in `CLAUDE.md`. A swing trader, an options income agent, a research-only analyst.
 - **Add a tool.** Add an optional data server to `.mcp.json`. See the Unusual Whales entry and the steps in `CLAUDE.md`.
 - **Remove anything.** Delete the file. Nothing else depends on it.
 
