@@ -185,7 +185,7 @@ const ssCtx = (env) => {
 let c = ssCtx({ DEEPTRADE_MAX_ORDER_USD: 100, DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" });
 check("session-start reports plan defaults", /strategies=opening-range-breakout \(default\)/.test(c) && /flat_by=15:50 \(default\)/.test(c));
 check("session-start: consistent defaults raise no problems", !/Settings problems/.test(c));
-check("session-start never prints non-DEEPTRADE keys", !/secret-value/.test(ssCtx({ UW_API_KEY: "secret-value" })));
+check("session-start never prints non-DEEPTRADE keys", !/secret-value/.test(ssCtx({ UNUSUAL_WHALES_API_KEY: "secret-value" })));
 c = ssCtx({ DEEPTRADE_FLAT_BY: "14:00", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" });
 check("session-start flags flat-by before last entry", /Settings problems/.test(c) && /not after DEEPTRADE_NO_NEW_ENTRIES_AFTER/.test(c));
 c = ssCtx({ DEEPTRADE_STRATEGIES: "opening-range-breakout,no-such-strategy" });
@@ -194,6 +194,12 @@ c = ssCtx({ DEEPTRADE_MAX_ORDR_USD: "100" });
 check("session-start flags unknown DEEPTRADE_ key", /DEEPTRADE_MAX_ORDR_USD is not a known setting/.test(c));
 c = ssCtx({ DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity,options" });
 check("session-start flags unknown asset class", /contains "options"/.test(c));
+c = ssCtx({});
+check("session-start: Unusual Whales not configured without key", /Unusual Whales not configured/.test(c));
+c = ssCtx({ UNUSUAL_WHALES_API_KEY: "secret-value", DEEPTRADE_UNUSUAL_WHALES_PLAN: "basic" });
+check("session-start: Unusual Whales configured with plan, key not shown", /Unusual Whales configured \(mcp__unusual-whales__\* tools, plan basic\)/.test(c) && !/secret-value/.test(c));
+c = ssCtx({ UNUSUAL_WHALES_API_KEY: "x", DEEPTRADE_UNUSUAL_WHALES_PLAN: "pro" });
+check("session-start flags unknown UW plan", /DEEPTRADE_UNUSUAL_WHALES_PLAN=pro is not one of/.test(c));
 c = ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "abc" });
 check("session-start flags non-numeric risk", /DEEPTRADE_RISK_PER_TRADE_PCT=abc must be a positive number/.test(c));
 
@@ -212,19 +218,54 @@ expect("guard: Write to journal/session-state.json allowed", guard("Write", { fi
 expect("guard: Write to journal/2026-10-23.md allowed", guard("Write", { file_path: abs("journal/2026-10-23.md"), content: "# day" }), "silent");
 expect("guard: Edit to a skill allowed", guard("Edit", { file_path: abs(".claude/skills/opening-range-breakout/SKILL.md"), old_string: "a", new_string: "b" }), "silent");
 expect("guard: Bash find -delete on hooks denied", guard("Bash", { command: "find .claude/hooks -name x -delete" }), "deny", "not a plain read");
-expect("guard: Bash find -exec rm on .env denied", guard("Bash", { command: "find . -name .env -exec rm {} ;" }), "deny", "not a plain read");
+expect("guard: Bash find -exec rm on .env denied", guard("Bash", { command: "find . -name .env -exec rm {} ;" }), "deny", "API keys");
 expect("guard: Bash plain find on hooks allowed", guard("Bash", { command: "find .claude/hooks -name '*.js'" }), "silent");
 expect("guard: path outside project ignored", guard("Write", { file_path: path.join(os.tmpdir(), "elsewhere", ".env"), content: "x" }), "silent");
 expect("guard: Bash sleep allowed", guard("Bash", { command: "sleep 240" }), "silent");
-expect("guard: Bash cat .env allowed (read)", guard("Bash", { command: "cat .env" }), "silent");
+expect("guard: Bash cat .env denied (secret)", guard("Bash", { command: "cat .env" }), "deny", "API keys");
+expect("guard: Bash grep in .env.local denied", guard("Bash", { command: "grep KEY .env.local" }), "deny", "API keys");
+expect("guard: Bash cat .env.example allowed", guard("Bash", { command: "cat .env.example" }), "silent");
+expect("guard: Bash mentioning .environment untouched", guard("Bash", { command: "echo .environment" }), "silent");
+expect("guard: Read .env denied", guard("Read", { file_path: abs(".env") }), "deny", "API keys");
+expect("guard: Read .env.example allowed", guard("Read", { file_path: abs(".env.example") }), "silent");
+expect("guard: Read a hook allowed", guard("Read", { file_path: abs(".claude/hooks/lib.js") }), "silent");
+expect("guard: Grep with glob .env denied", guard("Grep", { pattern: "KEY", glob: ".env" }), "deny", "API keys");
+expect("guard: Grep path .env denied", guard("Grep", { pattern: "KEY", path: abs(".env") }), "deny", "API keys");
 expect("guard: Bash grep piped to wc on hooks allowed (reads only)", guard("Bash", { command: "grep -c deny .claude/hooks/risk-gate.js | wc -l" }), "silent");
-expect("guard: Bash git diff on .env allowed", guard("Bash", { command: "git diff -- .env" }), "silent");
-expect("guard: Bash redirect into .env denied", guard("Bash", { command: "echo DEEPTRADE_HALT=false > .env" }), "deny", "not a plain read");
+expect("guard: Bash git diff on .env denied (secret)", guard("Bash", { command: "git diff -- .env" }), "deny", "API keys");
+expect("guard: Bash redirect into .env denied", guard("Bash", { command: "echo DEEPTRADE_HALT=false > .env" }), "deny", "API keys");
 expect("guard: Bash in-place edit of a hook denied", guard("Bash", { command: "sed -i 's/deny/allow/' .claude/hooks/risk-gate.js" }), "deny", "not a plain read");
 expect("guard: Bash rename of orders.jsonl denied", guard("Bash", { command: "mv journal/orders.jsonl journal/old.jsonl" }), "deny", "not a plain read");
 expect("guard: Bash node one-liner touching settings denied", guard("Bash", { command: "node -e \"require('fs').writeFileSync('.claude/settings.json','{}')\"" }), "deny", "not a plain read");
-expect("guard: Bash read chained with unknown program denied", guard("Bash", { command: "cat .env && tee .env" }), "deny", "not a plain read");
+expect("guard: Bash read chained with unknown program denied", guard("Bash", { command: "cat .env && tee .env" }), "deny", "API keys");
 expect("guard: Bash unrelated command untouched", guard("Bash", { command: "node tests/hooks.test.js" }), "silent");
+
+// ---- optional MCP launcher ----
+function launch(envObj, args, stdin) {
+  setEnv(envObj);
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: ROOT };
+  delete env.UNUSUAL_WHALES_API_KEY;
+  delete env.UW_API_KEY;
+  return spawnSync("node", [path.join(HOOKS, "optional-mcp.js"), ...args], { input: stdin, env, encoding: "utf8", timeout: 10000 });
+}
+const rpc = [
+  { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
+  { jsonrpc: "2.0", method: "notifications/initialized" },
+  { jsonrpc: "2.0", id: 2, method: "tools/list" },
+  { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "x" } },
+].map((m) => JSON.stringify(m)).join("\n") + "\n";
+let lr = launch({}, ["UNUSUAL_WHALES_API_KEY", "node", "-e", "process.exit(9)"], rpc);
+const replies = lr.stdout.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+check("launcher without key serves an empty MCP server", lr.status === 0 && replies.length === 3);
+check("launcher without key: initialize says not configured", replies[0] && /UNUSUAL_WHALES_API_KEY is not set/.test(replies[0].result.instructions));
+check("launcher without key: no tools", replies[1] && Array.isArray(replies[1].result.tools) && replies[1].result.tools.length === 0);
+check("launcher without key: tool calls error", replies[2] && replies[2].error && replies[2].error.code === -32601);
+lr = launch({ UNUSUAL_WHALES_API_KEY: "k-123" }, ["UNUSUAL_WHALES_API_KEY", "node", "-e", "process.stdout.write(process.env.UNUSUAL_WHALES_API_KEY); process.exit(3)"], "");
+check("launcher with key passes it to the child and keeps its exit code", lr.stdout === "k-123" && lr.status === 3);
+lr = launch({ UNUSUAL_WHALES_API_KEY: "k-456" }, ["UNUSUAL_WHALES_API_KEY:UW_API_KEY", "node", "-e", "process.stdout.write(String(process.env.UW_API_KEY))"], "");
+check("launcher maps the .env name to the child's variable", lr.stdout === "k-456" && lr.status === 0);
+lr = launch({}, [], "");
+check("launcher without arguments exits 2", lr.status === 2);
 
 // Tidy the temp project by name, no recursive delete: unlink known files, then
 // remove the now-empty directories.

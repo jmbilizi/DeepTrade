@@ -3,6 +3,17 @@
     "robinhood-trading": {
       "type": "http",
       "url": "https://agent.robinhood.com/mcp/trading"
+    },
+    "unusual-whales": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/optional-mcp.js",
+        "UNUSUAL_WHALES_API_KEY:UW_API_KEY",
+        "npx",
+        "-y",
+        "@unusualwhales/mcp@1.2.0"
+      ]
     }
   }
 }

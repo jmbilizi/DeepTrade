@@ -83,6 +83,15 @@ const PLAN_DEFAULTS = {
 
 const ASSET_CLASSES = ["equity", "option", "crypto"];
 
+// Optional data sources. Each is an .mcp.json server started through
+// optional-mcp.js, which offers no tools unless its key is set in .env.
+// planKey names the .env setting that records the user's subscription tier.
+// minNode is the Node major version the server needs, checked only when the
+// key is set, since the core hooks run on Node 18.
+const OPTIONAL_SOURCES = [
+  { name: "Unusual Whales", server: "unusual-whales", key: "UNUSUAL_WHALES_API_KEY", planKey: "DEEPTRADE_UNUSUAL_WHALES_PLAN", plans: ["starter", "basic", "advanced"], minNode: 20 },
+];
+
 // Plan settings with defaults filled in. Each value is { value, isDefault }.
 function planSettings(env) {
   const out = {};
@@ -373,6 +382,7 @@ module.exports = {
   GUARDRAIL_KEYS,
   PLAN_DEFAULTS,
   ASSET_CLASSES,
+  OPTIONAL_SOURCES,
   planSettings,
   gateSells,
   fs,

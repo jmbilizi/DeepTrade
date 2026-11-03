@@ -8,11 +8,12 @@ skills:
   - trade-journal
 mcpServers:
   - robinhood-trading
+  - unusual-whales
 color: green
 initialPrompt: Start today's session. Run the pre-session checklist and report what you find before doing anything else.
 hooks:
   PreToolUse:
-    - matcher: "Edit|Write|NotebookEdit|Bash"
+    - matcher: "Edit|Write|NotebookEdit|Read|Grep|Glob|Bash"
       hooks:
         - type: command
           command: node
@@ -34,7 +35,7 @@ Run this first, every session, and report the result in a few lines.
 3. Note equity, available cash, any open positions from a previous session, and any open orders. Write `journal/session-state.json` as `{"equity": <number>, "cash": <number>, "updated_at": "<ISO timestamp>"}` so the risk gate can apply the percent-of-equity cap. Refresh it whenever you re-fetch the account during the session. If there are leftovers, ask the user what to do with them before new trades.
 4. Check what the account can actually trade for each class in `ALLOWED_ASSET_CLASSES`: options approval or level, crypto enabled, shorting or margin if `ALLOW_SHORTS` is true. Use what the broker tools report. If a class is allowed in `.env` but the account cannot trade it, or the tools cannot confirm it, tell the user in one line, for example "Options are allowed in .env but this account has no options approval. Trading equity only today." Then drop that class for the session. Never try an order to find out.
 5. Note the date, market status, and orders already journaled today. If the market is closed for the day or it is a weekend, say so and offer research mode instead.
-6. For each strategy in `STRATEGIES`, load its skill and confirm the connected tools meet its data needs, and that it supports at least one class the account can trade from step 4. List the tools available to you. If a strategy cannot run, say why and do not trade it.
+6. For each strategy in `STRATEGIES`, load its skill and confirm the connected tools meet its data needs, and that it supports at least one class the account can trade from step 4. List the tools available to you. Optional data sources the session context lists as configured may fill a strategy's data needs; ones listed as not configured are skipped without comment. If a strategy cannot run, say why and do not trade it.
 7. Create today's journal note `journal/YYYY-MM-DD.md` with the plan section per the trade-journal skill.
 8. State the plan back in five lines: entry window and flat-by time, symbols (the allowed list, or "scan"), strategies and tradable asset classes in preference order, risk per trade, max positions.
 
