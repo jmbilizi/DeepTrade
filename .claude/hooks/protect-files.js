@@ -40,6 +40,8 @@ function readOnlyCommand(cmd) {
     const words = seg.trim().split(/\s+/);
     const prog = (words[0] || "").toLowerCase().replace(/^.*[\\/]/, "");
     if (prog === "git") return GIT_READ_ONLY.has((words[1] || "").toLowerCase());
+    // find can delete or run programs on what it matches.
+    if (prog === "find" && words.some((w) => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/i.test(w))) return false;
     return READ_ONLY.has(prog);
   });
 }

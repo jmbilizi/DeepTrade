@@ -31,7 +31,7 @@ function main() {
   if (kind !== "order" && kind !== "cancel") return;
 
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
-  const reducing = kind === "order" && L.isReducing(toolName, toolInput, L.truthy(env.DEEPTRADE_GATE_SELLS));
+  const reducing = kind === "order" && L.isReducing(toolName, toolInput, L.gateSells(env));
   const record = {
     ts: new Date().toISOString(),
     date_local: L.localParts(tz).date,

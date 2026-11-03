@@ -9,7 +9,7 @@ DeepTrade is an open-source collection of agent definitions, skills, hooks, and 
 ## What it is not
 
 - **Not financial advice.** Nothing in this repository, including strategy skills, example configurations, documentation, or agent output, is a recommendation to buy, sell, or hold any security, option, or digital asset.
-- **Examples are placeholders.** Ticker symbols, dollar caps, percentages, watchlists, and time windows in `.env.example`, `config/`, skills, and docs were chosen to illustrate the file format and nothing more. Their presence does not mean the authors trade them, endorse them, or think they are suitable for you.
+- **Examples are placeholders.** Ticker symbols, dollar caps, percentages, watchlists, and time windows in examples in skills and docs were chosen to illustrate the format and nothing more. Defaults in `.env.example` are conservative risk limits so the software runs without edits, not recommendations. Their presence does not mean the authors trade them, endorse them, or think they are suitable for you.
 - **Not a broker or adviser.** The authors and contributors are not registered broker-dealers, investment advisers, or financial professionals, and do not act in any fiduciary capacity toward you.
 - **Not supervised.** Nobody at this project reviews, audits, or monitors what an agent does in your account. Check your broker's own terms for what it does and does not take responsibility for when an external agent is connected. At the time of writing, Robinhood's documentation states that it does not guarantee the accuracy, completeness, or suitability of agent output.
 - **Broad read access.** Robinhood's documentation states that a connected agent can read all of your Robinhood accounts, including account numbers, positions, balances, and order history, while placing trades only in the dedicated agentic account. The journal hook redacts account numbers from what it writes, but the agent still sees them during a session.
@@ -22,7 +22,7 @@ DeepTrade is an open-source collection of agent definitions, skills, hooks, and 
 - Complying with your broker's terms of service, including any terms specific to agentic or automated trading.
 - Complying with the securities, tax, and other laws that apply to you.
 - Reviewing and understanding any strategy skill before enabling it.
-- Setting and maintaining the guardrails in `.env`, and understanding that they are a safety net, not a substitute for judgment. The risk gate estimates order value from the fields it recognizes in a request. It can be wrong, it cannot see fills, and it does not enforce the plan's stop losses or daily loss limit. Those live only in the agent's instructions.
+- Setting and maintaining the guardrails in `.env`, and understanding that they are a safety net, not a substitute for judgment. The risk gate estimates order value from the fields it recognizes in a request. It can be wrong, it cannot see fills, and it does not enforce stop losses or the daily loss limit. Those live only in the agent's instructions.
 
 ## Risk
 

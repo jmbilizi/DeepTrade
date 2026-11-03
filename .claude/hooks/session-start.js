@@ -18,15 +18,8 @@ function main() {
   lines.push(`DeepTrade session context. Local market time: ${now.text} (${tz}).`);
   lines.push(marketStatus(now));
 
-  const planFile = L.path.join(dir, "config", "day-trader.md");
-  lines.push(
-    L.fs.existsSync(planFile)
-      ? "Trading plan found at config/day-trader.md. Read it before any market action."
-      : "No trading plan at config/day-trader.md. A trading agent must ask the user to create one before trading."
-  );
-
   if (!L.fs.existsSync(L.path.join(dir, ".env"))) {
-    lines.push("No .env file found, so no risk gate limits are set. A trading agent must ask the user to copy .env.example to .env and fill it in before trading.");
+    lines.push("No .env file found, so no settings or risk gate limits are set. A trading agent must ask the user to run `cp .env.example .env` and review it before trading.");
   } else {
     const g = [];
     const show = (label, key) => g.push(`${label}=${env[key] === undefined || env[key] === "" ? "unset" : env[key]}`);
@@ -35,16 +28,23 @@ function main() {
     show("max_order_usd", "DEEPTRADE_MAX_ORDER_USD");
     show("max_order_pct", "DEEPTRADE_MAX_ORDER_PCT");
     show("max_orders_per_day", "DEEPTRADE_MAX_ORDERS_PER_DAY");
-    if (env.DEEPTRADE_ALLOWED_SYMBOLS) show("allowed_symbols", "DEEPTRADE_ALLOWED_SYMBOLS");
+    show("allowed_asset_classes", "DEEPTRADE_ALLOWED_ASSET_CLASSES");
+    show("allowed_symbols", "DEEPTRADE_ALLOWED_SYMBOLS");
     if (env.DEEPTRADE_BLOCKED_SYMBOLS) show("blocked_symbols", "DEEPTRADE_BLOCKED_SYMBOLS");
-    if (env.DEEPTRADE_ALLOWED_ASSET_CLASSES) show("allowed_asset_classes", "DEEPTRADE_ALLOWED_ASSET_CLASSES");
-    if (env.DEEPTRADE_NO_NEW_ENTRIES_BEFORE) show("no_new_entries_before", "DEEPTRADE_NO_NEW_ENTRIES_BEFORE");
-    if (env.DEEPTRADE_NO_NEW_ENTRIES_AFTER) show("no_new_entries_after", "DEEPTRADE_NO_NEW_ENTRIES_AFTER");
-    if (env.DEEPTRADE_GATE_SELLS) show("gate_sells", "DEEPTRADE_GATE_SELLS");
+    show("no_new_entries_before", "DEEPTRADE_NO_NEW_ENTRIES_BEFORE");
+    show("no_new_entries_after", "DEEPTRADE_NO_NEW_ENTRIES_AFTER");
+    g.push(`allow_shorts=${L.gateSells(env)}`);
     if (env.DEEPTRADE_REQUIRE_KNOWN_VALUE) show("require_known_value", "DEEPTRADE_REQUIRE_KNOWN_VALUE");
-    lines.push(`Active guardrails from .env: ${g.join(", ")}.`);
+    lines.push(`Guardrails from .env, enforced by the risk gate: ${g.join(", ")}.`);
     const anyCap = env.DEEPTRADE_MAX_ORDER_USD || env.DEEPTRADE_MAX_ORDER_PCT || env.DEEPTRADE_MAX_ORDERS_PER_DAY;
-    if (!anyCap) lines.push("Warning: .env exists but sets no order caps. The risk gate will only enforce the halt switch and symbol lists.");
+    if (!anyCap) lines.push("Warning: .env sets no order caps. The risk gate will only enforce the halt switch, symbols, asset classes, and time window.");
+
+    const plan = L.planSettings(env);
+    const p = Object.entries(plan).map(([k, v]) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${v.value}${v.isDefault ? " (default)" : ""}`);
+    lines.push(`Trading plan from .env, followed by the agent: ${p.join(", ")}.`);
+    lines.push("This context is the complete trading plan. Do not read .env directly; it may hold API keys.");
+    const problems = checkSettings(dir, env, plan);
+    if (problems.length) lines.push(`Settings problems. Report these to the user before trading: ${problems.join(" ")}`);
   }
 
   if (env.DEEPTRADE_MAX_ORDER_PCT) {
@@ -61,6 +61,35 @@ function main() {
   lines.push("Order tool calls to Robinhood prompt the user for permission unless they have allowlisted them. The risk gate hook may deny entries that breach .env limits. Exits and cancels are not capped.");
 
   L.emit({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: lines.join("\n") } });
+}
+
+// Catch settings that contradict each other or point at nothing.
+function checkSettings(dir, env, plan) {
+  const out = [];
+  const known = new Set([...L.GUARDRAIL_KEYS, ...Object.keys(L.PLAN_DEFAULTS)]);
+  for (const k of Object.keys(env)) {
+    if (k.startsWith("DEEPTRADE_") && !known.has(k)) out.push(`${k} is not a known setting (typo?) and is ignored.`);
+  }
+  for (const c of L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((x) => x.toLowerCase())) {
+    if (!L.ASSET_CLASSES.includes(c)) out.push(`DEEPTRADE_ALLOWED_ASSET_CLASSES contains "${c}", which is not one of ${L.ASSET_CLASSES.join(", ")}.`);
+  }
+  const strategies = String(plan.DEEPTRADE_STRATEGIES.value).split(",").map((s) => s.trim()).filter(Boolean);
+  if (!strategies.length) out.push("DEEPTRADE_STRATEGIES lists no strategy, so the agent has nothing it may trade.");
+  for (const s of strategies) {
+    if (!L.fs.existsSync(L.path.join(dir, ".claude", "skills", s, "SKILL.md"))) out.push(`Strategy "${s}" in DEEPTRADE_STRATEGIES has no skill at .claude/skills/${s}/SKILL.md.`);
+  }
+  for (const k of ["DEEPTRADE_NO_NEW_ENTRIES_BEFORE", "DEEPTRADE_NO_NEW_ENTRIES_AFTER"]) {
+    if (env[k] && L.parseHHMM(env[k]) === null) out.push(`${k}=${env[k]} is not HH:MM, so the gate ignores it.`);
+  }
+  const flat = L.parseHHMM(plan.DEEPTRADE_FLAT_BY.value);
+  const after = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_AFTER);
+  if (flat === null) out.push(`DEEPTRADE_FLAT_BY=${plan.DEEPTRADE_FLAT_BY.value} is not HH:MM.`);
+  else if (after !== null && flat <= after) out.push(`DEEPTRADE_FLAT_BY=${plan.DEEPTRADE_FLAT_BY.value} is not after DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER}, so positions could be opened after the flat-by time.`);
+  for (const k of ["DEEPTRADE_RISK_PER_TRADE_PCT", "DEEPTRADE_MAX_POSITIONS", "DEEPTRADE_DAILY_LOSS_PCT", "DEEPTRADE_CHECK_EVERY_MIN", "DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME"]) {
+    const n = L.num(plan[k].value);
+    if (n === null || n <= 0) out.push(`${k}=${plan[k].value} must be a positive number.`);
+  }
+  return out;
 }
 
 function marketStatus(now) {

@@ -17,6 +17,7 @@ It is simple to state, easy to verify after the fact, and limited to a narrow wi
 - 5-minute bars (open, high, low, close, volume) for the session so far.
 - VWAP for the session, or enough bar data to compute it.
 - A fresh quote with bid and ask at decision time.
+- For options: the chain for the chosen expiration with bid, ask, delta, open interest, and volume.
 
 Robinhood's Trading MCP exposes quotes, positions, and orders. At the time of writing it is not known to expose intraday bars or VWAP. If no tool returns bars and VWAP, do not approximate them from polled quotes. Tell the user this strategy cannot run with the connected data sources and offer research mode, or ask them to add a market data MCP that provides bars.
 
@@ -31,7 +32,7 @@ Robinhood's Trading MCP exposes quotes, positions, and orders. At the time of wr
 | Maximum range | 2.0% of price | Wider ranges make the stop too far for the risk budget |
 | Volume filter | Breakout bar volume at least 1.5x the average 5-minute volume of the range bars | |
 | VWAP filter | Longs require price above VWAP, shorts below | |
-| Target | 1.5x the range height from the breakout level | Partial at 1x is allowed if the plan permits |
+| Target | 1.5x the range height from the breakout level | No partial exits |
 | Stop | Opposite side of the range, or the range midpoint for ranges above 1% | Choose before entry, never widen |
 
 ## Entry rules
@@ -46,7 +47,28 @@ Robinhood's Trading MCP exposes quotes, positions, and orders. At the time of wr
 
 Enter at market on the open of the next bar, or with a limit no worse than 0.1% above the breakout level.
 
-**Short** mirrors the above below the range low and below VWAP. Only take shorts if the plan allows shorting and the account supports it. Robinhood agentic accounts may not. If in doubt, longs only.
+**Short** mirrors the above below the range low and below VWAP. Short stock only if `DEEPTRADE_ALLOW_SHORTS` is true and the account supports it. Robinhood agentic accounts may not. A bearish break can also be traded by buying puts, which is not a short; see Instruments.
+
+## Instruments
+
+Supports `equity` and `option`. Not `crypto`, which has no opening range. Use the first class in `DEEPTRADE_ALLOWED_ASSET_CLASSES` that the account can trade. Entry, stop, target, and invalidation are always measured on the underlying's price, whatever the instrument.
+
+**Equity.** Buy shares for a long break. Short shares for a bearish break only as allowed above.
+
+**Option.** Buy calls for a long break, puts for a bearish break. Debit only, no selling options. Choose the contract:
+
+| Rule | Default |
+| --- | --- |
+| Expiration | Nearest with 1 to 7 days left. Never same-day expiry |
+| Strike | Delta between 0.40 and 0.60 |
+| Liquidity | Open interest at least 500 and today's volume at least 100 |
+| Spread | Ask minus bid at most 10% of the mid |
+| Entry | Limit at the mid, never above the ask |
+| Premium stop | 50% of premium paid, a hard backstop |
+
+Exit the option when the underlying hits the stop, target, or an invalidation, or when the premium stop is hit, whichever comes first. Size it with the position-sizing skill, using the premium stop as the stop. If no contract passes every rule, or no tool returns the chain with bid, ask, delta, open interest, and volume, skip the option and use the next allowed class. If there is none, skip the trade.
+
+Options lose value to time decay and can lose value after a move when implied volatility drops. A correct breakout can still lose money on the option.
 
 ## Stop and target
 
@@ -62,7 +84,7 @@ Exit immediately, before stop or target, if any of these happens:
 - A 5-minute bar closes back inside the range after entry.
 - Price crosses back through VWAP against the position and closes there.
 - A scheduled high-impact release is within 10 minutes.
-- The plan's flat-by time arrives.
+- `DEEPTRADE_FLAT_BY` arrives.
 
 ## What this strategy is bad at
 

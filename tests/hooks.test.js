@@ -10,8 +10,9 @@ const path = require("path");
 const HOOKS = path.join(__dirname, "..", ".claude", "hooks");
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "deeptrade-hooktest-"));
 fs.mkdirSync(path.join(ROOT, "journal"), { recursive: true });
-fs.mkdirSync(path.join(ROOT, "config"), { recursive: true });
-fs.writeFileSync(path.join(ROOT, "config", "day-trader.md"), "# plan\n");
+const ORB_DIR = path.join(ROOT, ".claude", "skills", "opening-range-breakout");
+fs.mkdirSync(ORB_DIR, { recursive: true });
+fs.writeFileSync(path.join(ORB_DIR, "SKILL.md"), "# orb\n");
 
 let pass = 0;
 let fail = 0;
@@ -130,6 +131,9 @@ expect("HALT_ALL still silent on cancel", gate("cancel_equity_order", { id: "x" 
 // ---- gate sells ----
 setEnv({ DEEPTRADE_GATE_SELLS: "true", DEEPTRADE_MAX_ORDER_USD: 100 });
 expect("GATE_SELLS: plain sell is capped", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 10, limit_price: 130 }), "deny", "exceeds");
+setEnv({ DEEPTRADE_ALLOW_SHORTS: "true", DEEPTRADE_MAX_ORDER_USD: 100 });
+expect("ALLOW_SHORTS: plain sell is capped", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 10, limit_price: 130 }), "deny", "exceeds");
+setEnv({ DEEPTRADE_GATE_SELLS: "true", DEEPTRADE_MAX_ORDER_USD: 100 });
 expect("GATE_SELLS: reduce_only still bypasses", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 10, limit_price: 130, reduce_only: true }), "context", "position-reducing");
 
 // ---- time window (relative to now in market time) ----
@@ -172,6 +176,27 @@ const ss = run("session-start.js", { hook_event_name: "SessionStart", source: "s
 check("session-start emits context with opening order count", decision(ss) === "context" && /Opening orders already journaled/.test(ss.out.hookSpecificOutput.additionalContext));
 check("session-start says holidays are not checked", /holidays are not checked/i.test(ss.out.hookSpecificOutput.additionalContext));
 
+// Settings report and consistency checks.
+const ssCtx = (env) => {
+  setEnv(env);
+  const r = run("session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
+  return (r.out && r.out.hookSpecificOutput && r.out.hookSpecificOutput.additionalContext) || "";
+};
+let c = ssCtx({ DEEPTRADE_MAX_ORDER_USD: 100, DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" });
+check("session-start reports plan defaults", /strategies=opening-range-breakout \(default\)/.test(c) && /flat_by=15:50 \(default\)/.test(c));
+check("session-start: consistent defaults raise no problems", !/Settings problems/.test(c));
+check("session-start never prints non-DEEPTRADE keys", !/secret-value/.test(ssCtx({ UW_API_KEY: "secret-value" })));
+c = ssCtx({ DEEPTRADE_FLAT_BY: "14:00", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" });
+check("session-start flags flat-by before last entry", /Settings problems/.test(c) && /not after DEEPTRADE_NO_NEW_ENTRIES_AFTER/.test(c));
+c = ssCtx({ DEEPTRADE_STRATEGIES: "opening-range-breakout,no-such-strategy" });
+check("session-start flags a strategy with no skill", /no-such-strategy/.test(c) && /has no skill/.test(c));
+c = ssCtx({ DEEPTRADE_MAX_ORDR_USD: "100" });
+check("session-start flags unknown DEEPTRADE_ key", /DEEPTRADE_MAX_ORDR_USD is not a known setting/.test(c));
+c = ssCtx({ DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity,options" });
+check("session-start flags unknown asset class", /contains "options"/.test(c));
+c = ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "abc" });
+check("session-start flags non-numeric risk", /DEEPTRADE_RISK_PER_TRADE_PCT=abc must be a positive number/.test(c));
+
 // ---- file guard (agent-scoped protect-files.js) ----
 const guard = (tool, ti) => run("protect-files.js", { tool_name: tool, tool_input: ti, cwd: ROOT });
 const abs = (p) => path.join(ROOT, p);
@@ -186,7 +211,9 @@ expect("guard: relative path .env denied", guard("Write", { file_path: ".env", c
 expect("guard: Write to journal/session-state.json allowed", guard("Write", { file_path: abs("journal/session-state.json"), content: "{}" }), "silent");
 expect("guard: Write to journal/2026-10-23.md allowed", guard("Write", { file_path: abs("journal/2026-10-23.md"), content: "# day" }), "silent");
 expect("guard: Edit to a skill allowed", guard("Edit", { file_path: abs(".claude/skills/opening-range-breakout/SKILL.md"), old_string: "a", new_string: "b" }), "silent");
-expect("guard: Edit to config/day-trader.md allowed", guard("Edit", { file_path: abs("config/day-trader.md"), old_string: "a", new_string: "b" }), "silent");
+expect("guard: Bash find -delete on hooks denied", guard("Bash", { command: "find .claude/hooks -name x -delete" }), "deny", "not a plain read");
+expect("guard: Bash find -exec rm on .env denied", guard("Bash", { command: "find . -name .env -exec rm {} ;" }), "deny", "not a plain read");
+expect("guard: Bash plain find on hooks allowed", guard("Bash", { command: "find .claude/hooks -name '*.js'" }), "silent");
 expect("guard: path outside project ignored", guard("Write", { file_path: path.join(os.tmpdir(), "elsewhere", ".env"), content: "x" }), "silent");
 expect("guard: Bash sleep allowed", guard("Bash", { command: "sleep 240" }), "silent");
 expect("guard: Bash cat .env allowed (read)", guard("Bash", { command: "cat .env" }), "silent");
@@ -201,10 +228,10 @@ expect("guard: Bash unrelated command untouched", guard("Bash", { command: "node
 
 // Tidy the temp project by name, no recursive delete: unlink known files, then
 // remove the now-empty directories.
-for (const f of [".env", "config/day-trader.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json"]) {
+for (const f of [".env", ".claude/skills/opening-range-breakout/SKILL.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json"]) {
   try { fs.unlinkSync(path.join(ROOT, f)); } catch { /* absent */ }
 }
-for (const d of ["config", "journal", ""]) {
+for (const d of [".claude/skills/opening-range-breakout", ".claude/skills", ".claude", "journal", ""]) {
   try { fs.rmdirSync(path.join(ROOT, d)); } catch { /* leave it */ }
 }
 console.log(`\n${pass} passed, ${fail} failed`);

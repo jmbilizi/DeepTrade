@@ -6,14 +6,14 @@ You bring a Claude account and a Robinhood account. The repo brings the agents, 
 
 > **Read [DISCLAIMER.md](DISCLAIMER.md) first.** This software places real orders with real money. It is not financial advice. The authors are not responsible for your trades, your losses, or your account. Use only money you can afford to lose.
 >
-> Any ticker symbol, dollar amount, percentage, or strategy that appears in this repo's examples, templates, or config files exists only to show the format. None of it is a recommendation to buy, sell, or trade anything.
+> The defaults in `.env.example` are conservative risk limits that let the repo run without edits. They are not recommendations. No ticker is set by default. Any ticker or number in an example exists only to show the format.
 
 ## How it works
 
 ```text
 you ──► claude --agent day-trader
             │
-            ├── reads config/day-trader.md         your trading plan
+            ├── reads .env (via session hook)      your limits and plan, one file
             ├── loads skills/                      strategies and procedures
             ├── calls Robinhood Trading MCP        market data, account, orders
             │       │
@@ -41,13 +41,12 @@ The model decides. Code checks. Every opening order passes through a determinist
    ```
    Accept the workspace trust dialog and approve the project's MCP server when Claude Code asks. Both are needed for the hooks and permission rules in this repo to take effect.
 2. **Connect Robinhood.** Inside Claude Code run `/mcp`, pick `robinhood-trading`, and sign in. Robinhood walks you through opening a dedicated agentic account, agreeing to its terms, and funding it. Only that account can be traded by the agent.
-3. **Set your limits.** Copy the example file and edit the numbers. These are hard caps enforced by the risk gate hook.
+3. **Create your settings.** Copy the example file. It works as shipped. Review it and change only what you want different, such as the dollar cap, allowed symbols, or asset classes. `.env` is the only settings file: guardrails the hook enforces and the plan the agent follows.
    ```bash
    cp .env.example .env        # macOS, Linux, Git Bash
    copy .env.example .env      # Windows cmd or PowerShell
    ```
-4. **Write your plan.** Edit `config/day-trader.md` with your watchlist, session hours, risk per trade, and which strategies to enable.
-5. **Launch.**
+4. **Launch.**
    ```bash
    claude --agent day-trader
    ```
@@ -83,14 +82,16 @@ The model decides. Code checks. Every opening order passes through a determinist
 | `DEEPTRADE_ALLOWED_ASSET_CLASSES` | The order looks like a class not listed, out of `equity`, `option`, `crypto`. |
 | `DEEPTRADE_NO_NEW_ENTRIES_BEFORE` / `_AFTER` | Current market time is outside the window, `HH:MM`. |
 | `DEEPTRADE_REQUIRE_KNOWN_VALUE=true` | The gate cannot estimate the order's value, for example a market order with no dollar amount. |
-| `DEEPTRADE_GATE_SELLS=true` | Treat plain sells as entries too. Set this if your account can short. |
+| `DEEPTRADE_ALLOW_SHORTS=true` | Not a refusal by itself: lets strategies short and makes the gate cap plain sells as entries. `DEEPTRADE_GATE_SELLS` still works as an alias. |
 | `DEEPTRADE_TIMEZONE` | Not a limit. Market timezone for the time rules, default `America/New_York`. |
 
 The percent cap needs to know your equity. The agent writes it to `journal/session-state.json` at the start of each session, and the gate refuses entries if that file is missing or more than 20 hours old.
 
-**File guard.** Trading agents carry a hook in their own definition that denies them write access to `.env`, `.mcp.json`, `CLAUDE.md`, the settings files, the hooks, the agent definitions, and the hook-written journal files. A normal `claude` session in the repo is not restricted, so you can still ask Claude to improve the hooks or the plan. The guard only applies after you accept the workspace trust dialog the first time you open the repo.
+**Trading plan settings.** Also in `.env`, followed by the agent rather than the hook: `DEEPTRADE_STRATEGIES`, `DEEPTRADE_RISK_PER_TRADE_PCT`, `DEEPTRADE_MAX_POSITIONS`, `DEEPTRADE_DAILY_LOSS_PCT`, `DEEPTRADE_FLAT_BY`, `DEEPTRADE_CHECK_EVERY_MIN`, `DEEPTRADE_FRACTIONAL_SHARES`, and the scan filters. `DEEPTRADE_ALLOWED_ASSET_CLASSES` is in order of preference: for each signal the agent uses the first class that both the strategy and your account support. If your account cannot trade a class you allowed, for example no options approval, the agent tells you at session start and skips it. At session start the hook reports every setting with defaults filled in, and flags typos and contradictions such as a flat-by time before the last entry time.
 
-**What the gate cannot do.** It estimates value from the fields it recognizes in the request, so an unfamiliar payload shape can make the estimate unknown. It never sees fills, so it does not enforce stop losses, the daily loss limit, or position counts. Those live in the agent's instructions and the plan. Treat the gate as a seat belt, not a cage.
+**File guard.** Trading agents carry a hook in their own definition that denies them write access to `.env`, `.mcp.json`, `CLAUDE.md`, the settings files, the hooks, the agent definitions, and the hook-written journal files. A normal `claude` session in the repo is not restricted, so you can still ask Claude to improve the hooks or skills. The guard only applies after you accept the workspace trust dialog the first time you open the repo.
+
+**What the gate cannot do.** It estimates value from the fields it recognizes in the request, so an unfamiliar payload shape can make the estimate unknown. It never sees fills, so it does not enforce stop losses, the daily loss limit, or position counts. Those live in the agent's instructions and the `.env` plan settings. Treat the gate as a seat belt, not a cage.
 
 ## What's in the box
 
@@ -108,14 +109,13 @@ The percent cap needs to know your equity. The agent writes it to `journal/sessi
 | `.claude/hooks/lib.js` | Shared classifier and parsers used by the hooks. |
 | `.claude/settings.json` | Wires the project-wide hooks and allows `sleep`, journal writes, and web search without prompts. |
 | `tests/hooks.test.js` | Regression suite for the hooks. Run with `node tests/hooks.test.js`. |
-| `config/day-trader.md` | Your trading plan. The agent reads it every session. |
 | `.mcp.json` | Declares the Robinhood Trading MCP server. No secrets inside. |
 
 ## Customize
 
 Everything is plain markdown and small scripts.
 
-- **Change the strategy.** Edit a skill under `.claude/skills/`, or copy one to a new folder and list it in your plan.
+- **Change the strategy.** Edit a skill under `.claude/skills/`, or copy one to a new folder and add its name to `DEEPTRADE_STRATEGIES`.
 - **Change the agent.** Edit `.claude/agents/day-trader.md`. The body is its system prompt.
 - **Add an agent.** Drop a new `.md` in `.claude/agents/`. A swing trader, an options income agent, a research-only analyst.
 - **Add a tool.** Add an MCP server to `.mcp.json`, for example a market data server that provides intraday bars, which the first strategy needs and Robinhood's server is not known to provide.
