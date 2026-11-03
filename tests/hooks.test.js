@@ -19,11 +19,13 @@ let fail = 0;
 const NOW = new Date().toISOString();
 const OLD = new Date(Date.now() - 30 * 3600e3).toISOString();
 
-function setEnv(obj) {
+function setEnv(obj, { keepSnapshot = false } = {}) {
   fs.writeFileSync(path.join(ROOT, ".env"), Object.entries(obj).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
+  // Each test starts as a fresh session unless it is testing a mid-session edit.
+  if (!keepSnapshot) try { fs.unlinkSync(path.join(ROOT, "journal", "settings-snapshot.json")); } catch { /* absent */ }
 }
 function setState(s) {
-  const f = path.join(ROOT, "journal", "session-state.json");
+  const f = path.join(ROOT, "journal", "account-state.json");
   if (s === null) {
     try { fs.unlinkSync(f); } catch { /* absent */ }
     return;
@@ -31,7 +33,7 @@ function setState(s) {
   fs.writeFileSync(f, JSON.stringify(s));
 }
 function clearJournal() {
-  for (const f of ["orders.jsonl", "tools-seen.txt"]) {
+  for (const f of ["orders.jsonl", "tools-seen.txt", "option-ids.json"]) {
     try { fs.unlinkSync(path.join(ROOT, "journal", f)); } catch { /* absent */ }
   }
 }
@@ -89,13 +91,23 @@ expect("close_position tool passes", gate("close_position", { symbol: "TSLA" }),
 expect("sell_to_open option is NOT reducing", gate("place_option_order", { symbol: "NVDA", side: "sell_to_open", contracts: 1, limit_price: 1 }), "deny", "option order");
 
 // ---- entries ----
-expect("buy within both caps passes (pct 400 binding)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }), "context", "within the $400.00 cap");
-expect("buy over pct cap denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 130 }), "deny", "exceeds the per-order cap of $400.00");
+expect("both caps set -> lower wins (pct 400)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }), "context", "within the $400.00 cap");
+expect("both caps set -> over the lower denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 130 }), "deny", "exceeds the per-order cap of $400.00");
 expect("buy non-allowed symbol denied", gate("place_equity_order", { symbol: "AAPL", side: "buy", quantity: 1, limit_price: 1 }), "deny", "not in DEEPTRADE_ALLOWED_SYMBOLS");
 expect("buy with no symbol and allowlist set denied", gate("place_equity_order", { side: "buy", quantity: 1, limit_price: 1 }), "deny", "could not find a symbol");
 expect("nested trailing.value does not shrink estimate", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 100, limit_price: 130, trailing: { value: 2, unit: "percent" } }), "deny", "exceeds");
 expect("market order with bogus price is unknown value", gate("place_equity_order", { symbol: "NVDA", side: "buy", type: "market", quantity: 1000, price: 0.01 }), "context", "could not estimate");
 expect("market order with notional uses notional", gate("place_equity_order", { symbol: "NVDA", side: "buy", type: "market", notional: 450 }), "deny", "exceeds the per-order cap of $400.00");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDER_PCT: "" });
+setState({ equity: 4000, buying_power: 3000, cash: 3000, updated_at: NOW });
+expect("only USD, buying power covers it -> USD", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 3, limit_price: 130 }), "context", "within the $500.00 cap (DEEPTRADE_MAX_ORDER_USD; buying power");
+setState({ equity: 4000, buying_power: 300, cash: 300, updated_at: NOW });
+expect("only USD, buying power below it -> default 10% of equity", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 110 }), "deny", "because buying power $300.00 is below");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDER_USD: "", DEEPTRADE_MAX_ORDER_PCT: 5 });
+expect("only PCT -> that percent", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 110 }), "deny", "cap of $200.00 (5% of equity");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDER_USD: "", DEEPTRADE_MAX_ORDER_PCT: "" });
+expect("neither set -> default 10% of equity", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 3, limit_price: 130 }), "context", "within the $400.00 cap (10% of equity $4000.00 (default))");
+setEnv(BASE); setState({ equity: 4000, cash: 3000, updated_at: NOW });
 expect("asset_quantity key recognized", gate("place_equity_order", { symbol: "NVDA", side: "buy", asset_quantity: 5, limit_price: 130 }), "deny", "exceeds");
 
 // ---- options multiplier ----
@@ -109,16 +121,18 @@ expect("REQUIRE_KNOWN_VALUE denies market entry without notional", gate("place_e
 
 // ---- pct cap with missing / stale state ----
 setEnv({ DEEPTRADE_MAX_ORDER_PCT: 10 }); setState(null);
-expect("pct only + no state -> deny entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "no usable equity");
+expect("pct only + no state -> deny entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "no account read is recorded");
 setState({ equity: 4000, updated_at: OLD });
-expect("pct only + stale state -> deny entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "30h old");
+expect("pct only + stale state -> deny entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "minutes old (limit 2)");
 expect("pct only + stale state -> exit still passes", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 1, type: "market" }), "context", "position-reducing");
 setEnv({ DEEPTRADE_MAX_ORDER_USD: 500, DEEPTRADE_MAX_ORDER_PCT: 10 });
 expect("usd+pct + stale state -> deny entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "cannot be computed");
 setEnv({ DEEPTRADE_MAX_ORDER_USD: 500 }); setState(null);
-expect("usd only, no state -> fine", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "context", "DEEPTRADE_MAX_ORDER_USD");
+expect("usd only, no state -> deny (needs buying power)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "deny", "no account read is recorded");
 setEnv({ DEEPTRADE_HALT: "false" });
-expect("no caps -> note", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "context", "No per-order value cap");
+expect("no caps set, no state -> deny (default cap needs equity)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 100 }), "deny", "no account read is recorded");
+// From here on, a large fresh account so the default cap does not interfere.
+setState({ equity: 1000000, buying_power: 1000000, cash: 1000000, updated_at: NOW });
 
 // ---- halt semantics ----
 setEnv({ DEEPTRADE_HALT: "true" });
@@ -144,7 +158,7 @@ const plus = (m) => { const t = (hh * 60 + mm + m + 1440) % 1440; return `${Stri
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: plus(-5) });
 expect("NO_NEW_ENTRIES_AFTER in the past denies entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_AFTER");
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: plus(5), DEEPTRADE_NO_NEW_ENTRIES_BEFORE: plus(-5) });
-expect("inside window passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "No per-order value cap");
+expect("inside window passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_BEFORE: plus(5) });
 expect("NO_NEW_ENTRIES_BEFORE in the future denies entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_BEFORE");
 
@@ -163,10 +177,65 @@ check("buy record gated=true, sell record gated=false and reducing", lines[0].ga
 check("account numbers redacted in input and response", JSON.stringify(lines[0]).indexOf("123456789012") === -1 && lines[0].input.account_number === "…9012");
 check("date_local present", /^\d{4}-\d{2}-\d{2}$/.test(lines[0].date_local));
 check("tools-seen lists all 4 distinct tools", seen.length === 4 && seen.includes("mcp__robinhood-trading__review_equity_order"));
+setState({ equity: 1000000, buying_power: 1000000, cash: 1000000, updated_at: new Date().toISOString() });
 expect("1 opening order so far, cap 2 -> entry passes with 1/2", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "1/2");
 j("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 130 }, { id: "o3" });
 expect("2 opening orders, cap 2 -> entry denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "Daily entry cap reached: 2/2");
 expect("2 opening orders, cap 2 -> exit still passes", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 1, type: "market" }), "context", "position-reducing");
+
+// ---- account state recorded by the hook from broker responses ----
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99 }); clearJournal(); setState(null);
+try { fs.unlinkSync(path.join(ROOT, "journal", "agentic-accounts.json")); } catch { /* absent */ }
+const acctFile = path.join(ROOT, "journal", "account-state.json");
+j("get_portfolio", { account_number: "A1" }, { data: { total_value: "4000", cash: "3000", buying_power: { buying_power: "3000.0000" } } });
+check("portfolio ignored before get_accounts names the agentic account", !fs.existsSync(acctFile));
+j("get_accounts", {}, [{ type: "text", text: JSON.stringify({ data: { accounts: [{ account_number: "MAIN", agentic_allowed: false }, { account_number: "A1", agentic_allowed: true }] } }) }]);
+j("get_portfolio", { account_number: "MAIN" }, { data: { total_value: "90000", cash: "90000", buying_power: { buying_power: "90000" } } });
+check("portfolio of a non-agentic account is ignored", !fs.existsSync(acctFile));
+j("get_portfolio", { account_number: "A1" }, { data: { total_value: "4000", cash: "3000", buying_power: { buying_power: "3000.0000" } } });
+const acct = JSON.parse(fs.readFileSync(acctFile, "utf8"));
+check("agentic portfolio recorded from the response", acct.equity === 4000 && acct.buying_power === 3000);
+expect("fresh hook-recorded read -> entry checked against it", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }), "context", "within the $400.00 cap");
+j("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }, { id: "x1" });
+expect("order after the last read -> next entry needs a new read", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 130 }), "deny", "sent after the last account read");
+expect("exits still pass without a new read", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 1, type: "market" }), "context", "position-reducing");
+j("get_portfolio", { account_number: "A1" }, { data: { total_value: "4000", cash: "2740", buying_power: { buying_power: "2740" } } });
+expect("new read after the order -> entry passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 130 }), "context", "within the $400.00 cap");
+expect("guard: Write to journal/account-state.json denied", run("protect-files.js", { tool_name: "Write", tool_input: { file_path: path.join(ROOT, "journal/account-state.json"), content: "{}" }, cwd: ROOT }), "deny", "protected");
+setState({ equity: 1000000, buying_power: 1000000, cash: 1000000, updated_at: new Date().toISOString() });
+
+// ---- .env edited mid-session ----
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99 });
+expect("first entry with no snapshot passes and takes one", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99, DEEPTRADE_RISK_PER_TRADE_PCT: "0.25" }, { keepSnapshot: true });
+expect("plan edited mid-session -> entry refused once with the new value", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "DEEPTRADE_RISK_PER_TRADE_PCT: 0.5 -> 0.25");
+expect("retry after the change was reported passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
+setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99, DEEPTRADE_RISK_PER_TRADE_PCT: "0.25", UNUSUAL_WHALES_API_KEY: "secret-xyz" }, { keepSnapshot: true });
+expect("an API key change is never reported or blocking", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
+run("session-start.js", { source: "startup", cwd: ROOT });
+check("session start snapshot holds no API key", fs.readFileSync(path.join(ROOT, "journal", "settings-snapshot.json"), "utf8").indexOf("secret-xyz") === -1);
+expect("guard: Write to journal/settings-snapshot.json denied", run("protect-files.js", { tool_name: "Write", tool_input: { file_path: path.join(ROOT, "journal/settings-snapshot.json"), content: "{}" }, cwd: ROOT }), "deny", "protected");
+
+// ---- real Robinhood tool names and option order shape (observed 2026-11-03) ----
+for (const t of ["create_alert", "create_scan", "decline_trade_approval", "run_scan", "authenticate", "set_legend_chart_settings"]) {
+  expect(`${t} is not an order`, gate(t, {}), "silent");
+}
+expect("exercise_option is still treated as an order", gate("exercise_option", { option_id: "x", quantity: 1 }), "deny");
+setEnv({ ...BASE, DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity,option", DEEPTRADE_MAX_ORDER_USD: 1000, DEEPTRADE_MAX_ORDER_PCT: "" });
+clearJournal();
+const leg = (id, side, effect) => ({ option_id: id, side, position_effect: effect, ratio_quantity: 1 });
+expect("option legs with unseen id denied under allowlist", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "1", price: "3.20", type: "limit" }), "deny", "get_option_instruments");
+// MCP tool responses can arrive as content blocks with JSON text.
+j("get_option_instruments", { chain_symbol: "NVDA" }, [{ type: "text", text: JSON.stringify({ data: { instruments: [{ id: "id-nv", chain_symbol: "NVDA", strike_price: "130.0000" }, { id: "id-aapl", chain_symbol: "AAPL" }] } }) }]);
+check("option ids recorded from get_option_instruments", JSON.parse(fs.readFileSync(path.join(ROOT, "journal", "option-ids.json"), "utf8"))["id-nv"] === "NVDA");
+expect("resolved option entry within cap passes, x100, size from top-level quantity", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "2", price: "3.20", type: "limit" }), "context", "$640.00");
+expect("resolved option entry over cap denied", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "4", price: "3.20", type: "limit" }), "deny", "exceeds");
+expect("option on non-allowed underlying denied", gate("place_option_order", { account_number: "1", legs: [leg("id-aapl", "buy", "open")], quantity: "1", price: "1", type: "limit" }), "deny", "AAPL is not in");
+expect("sell-to-open leg is an entry, not an exit", gate("place_option_order", { account_number: "1", legs: [leg("id-nv", "sell", "open")], quantity: "5", price: "3.20", type: "limit" }), "deny", "exceeds");
+expect("sell-to-close leg is an exit even unresolved", gate("place_option_order", { account_number: "1", legs: [leg("id-unknown", "sell", "close")], quantity: "5", type: "market" }), "context", "position-reducing");
+j("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open")], quantity: "1", price: "3.20" }, { id: "oo1" });
+const optRec = fs.readFileSync(path.join(ROOT, "journal", "orders.jsonl"), "utf8").trim().split("\n").map(JSON.parse).pop();
+check("journal records option underlying and gated entry", optRec.symbol === "NVDA" && optRec.gated === true && optRec.asset_class === "option");
 
 // ---- robustness ----
 expect("garbage stdin silent", run("risk-gate.js", "not json"), "silent");
@@ -212,6 +281,8 @@ expect("guard: Write to .claude/hooks/risk-gate.js denied", guard("Write", { fil
 expect("guard: Edit to .claude/agents/day-trader.md denied", guard("Edit", { file_path: abs(".claude/agents/day-trader.md"), old_string: "a", new_string: "b" }), "deny", "protected");
 expect("guard: Edit to .claude/settings.json denied", guard("Edit", { file_path: abs(".claude/settings.json"), old_string: "a", new_string: "b" }), "deny", "protected");
 expect("guard: Write to journal/orders.jsonl denied", guard("Write", { file_path: abs("journal/orders.jsonl"), content: "x" }), "deny", "protected");
+expect("guard: Write to journal/option-ids.json denied", guard("Write", { file_path: abs("journal/option-ids.json"), content: "{}" }), "deny", "protected");
+expect("guard: shell write to journal/option-ids.json denied", guard("Bash", { command: "echo '{}' > journal/option-ids.json" }), "deny");
 expect("guard: Write to CLAUDE.md denied (case-insensitive)", guard("Write", { file_path: abs("Claude.md"), content: "x" }), "deny", "protected");
 expect("guard: relative path .env denied", guard("Write", { file_path: ".env", content: "x" }), "deny", "protected");
 expect("guard: Write to journal/session-state.json allowed", guard("Write", { file_path: abs("journal/session-state.json"), content: "{}" }), "silent");
@@ -269,7 +340,7 @@ check("launcher without arguments exits 2", lr.status === 2);
 
 // Tidy the temp project by name, no recursive delete: unlink known files, then
 // remove the now-empty directories.
-for (const f of [".env", ".claude/skills/opening-range-breakout/SKILL.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json"]) {
+for (const f of [".env", ".claude/skills/opening-range-breakout/SKILL.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json", "journal/account-state.json", "journal/option-ids.json", "journal/settings-snapshot.json", "journal/agentic-accounts.json"]) {
   try { fs.unlinkSync(path.join(ROOT, f)); } catch { /* absent */ }
 }
 for (const d of [".claude/skills/opening-range-breakout", ".claude/skills", ".claude", "journal", ""]) {

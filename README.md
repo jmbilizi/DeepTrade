@@ -54,7 +54,7 @@ The model decides. Code checks. Every opening order passes through a determinist
 
 ## Optional: Unusual Whales
 
-Robinhood is the only required connection. If you have an [Unusual Whales API](https://unusualwhales.com/public-api) plan, the agent can also use its options flow, dark pool, GEX, candles, and earnings data.
+Robinhood is the only required connection. If you have an [Unusual Whales API](https://unusualwhales.com/public-api) plan, the agent can also use its options flow, dark pool, gamma exposure, market tide, and economic calendar. Robinhood alone covers what the shipped strategy needs.
 
 1. Buy an API plan at [unusualwhales.com/pricing?product=api](https://unusualwhales.com/pricing?product=api) and copy your key from the [API dashboard](https://unusualwhales.com/dashboard/api). `.env.example` explains each plan and what the data adds for the agents.
 2. Put your key and plan in `.env`:
@@ -88,8 +88,8 @@ Without a key, the server still starts but offers no tools, so nothing errors. C
 | --- | --- |
 | `DEEPTRADE_HALT=true` | Any new entry. Exits and cancels still work. |
 | `DEEPTRADE_HALT_ALL=true` | Any order including exits. Only cancels work. |
-| `DEEPTRADE_MAX_ORDER_USD` | Estimated order value exceeds this. |
-| `DEEPTRADE_MAX_ORDER_PCT` | Estimated order value exceeds this percent of equity. The lower of the two caps wins. |
+| `DEEPTRADE_MAX_ORDER_USD` | Estimated order value exceeds this. Empty by default. Alone, it is the cap while buying power covers it, otherwise 10% of equity. |
+| `DEEPTRADE_MAX_ORDER_PCT` | Estimated order value exceeds this percent of equity. Empty by default, which means 10%. With both set, the lower cap wins. |
 | `DEEPTRADE_MAX_ORDERS_PER_DAY` | This many opening orders were already submitted today, market time. |
 | `DEEPTRADE_ALLOWED_SYMBOLS` | The symbol is not on this list. Options match by underlying, crypto by base asset. |
 | `DEEPTRADE_BLOCKED_SYMBOLS` | The symbol is on this list. |
@@ -99,7 +99,7 @@ Without a key, the server still starts but offers no tools, so nothing errors. C
 | `DEEPTRADE_ALLOW_SHORTS=true` | Not a refusal by itself: lets strategies short and makes the gate cap plain sells as entries. `DEEPTRADE_GATE_SELLS` still works as an alias. |
 | `DEEPTRADE_TIMEZONE` | Not a limit. Market timezone for the time rules, default `America/New_York`. |
 
-The percent cap needs to know your equity. The agent writes it to `journal/session-state.json` at the start of each session, and the gate refuses entries if that file is missing or more than 20 hours old.
+The per-order cap needs your equity and buying power. A hook records them from Robinhood's own `get_portfolio` response for your agentic account, so the agent cannot misstate them. The gate refuses an entry when that read is over 2 minutes old or older than the last order, since every fill changes buying power. If you edit `.env` during a session, the gate refuses the next entry once and tells the agent the new values.
 
 **Trading plan settings.** Also in `.env`, followed by the agent rather than the hook: `DEEPTRADE_STRATEGIES`, `DEEPTRADE_RISK_PER_TRADE_PCT`, `DEEPTRADE_MAX_POSITIONS`, `DEEPTRADE_DAILY_LOSS_PCT`, `DEEPTRADE_FLAT_BY`, `DEEPTRADE_CHECK_EVERY_MIN`, `DEEPTRADE_FRACTIONAL_SHARES`, and the scan filters. `DEEPTRADE_ALLOWED_ASSET_CLASSES` is in order of preference: for each signal the agent uses the first class that both the strategy and your account support. If your account cannot trade a class you allowed, for example no options approval, the agent tells you at session start and skips it. At session start the hook reports every setting with defaults filled in, and flags typos and contradictions such as a flat-by time before the last entry time.
 
@@ -112,6 +112,8 @@ The percent cap needs to know your equity. The agent writes it to `journal/sessi
 | Path | What it is |
 | --- | --- |
 | `.claude/agents/day-trader.md` | The first agent. Intraday entries and exits on a watchlist, flat by close. |
+| `.claude/skills/trading-preflight/` | Shared pre-session checks: settings, broker connection, account state, what the account can trade. |
+| `.claude/skills/order-execution/` | Shared rules for sending, confirming, and managing orders safely. |
 | `.claude/skills/opening-range-breakout/` | The first strategy. Rules, filters, stop and target logic, data it needs. |
 | `.claude/skills/position-sizing/` | Fixed-fractional risk sizing for shares, fractional shares, and contracts. |
 | `.claude/skills/premarket-scan/` | How the agent builds the day's watchlist. |
@@ -132,15 +134,15 @@ Everything is plain markdown and small scripts.
 
 - **Change the strategy.** Edit a skill under `.claude/skills/`, or copy one to a new folder and add its name to `DEEPTRADE_STRATEGIES`.
 - **Change the agent.** Edit `.claude/agents/day-trader.md`. The body is its system prompt.
-- **Add an agent.** Drop a new `.md` in `.claude/agents/`. A swing trader, an options income agent, a research-only analyst.
-- **Add a tool.** Add an MCP server to `.mcp.json`, for example a market data server that provides intraday bars, which the first strategy needs and Robinhood's server is not known to provide.
+- **Add an agent.** Drop a new `.md` in `.claude/agents/`, copy the `hooks` block from `day-trader.md`, and preload the shared skills. Put only what makes it a different trader in the agent; see "Agent or skill" in `CLAUDE.md`. A swing trader, an options income agent, a research-only analyst.
+- **Add a tool.** Add an optional data server to `.mcp.json`. See the Unusual Whales entry and the steps in `CLAUDE.md`.
 - **Remove anything.** Delete the file. Nothing else depends on it.
 
 ## Known limits
 
 - Claude Code must stay open for the agent to work. Close the terminal and it stops.
-- Robinhood's agentic trading is in beta. Tool names are not in Robinhood's documentation. The hooks classify tools by name shape and record every name they see in `journal/tools-seen.txt`, so you can check what your account exposes.
-- The opening range breakout strategy needs 5-minute bars and VWAP. If no connected tool provides them, the agent is instructed to say so and not trade it.
+- Robinhood's agentic trading is in beta and its tools can change. The hooks know the tool names observed on 2026-11-03, classify unknown ones by name shape, and record every name they see in `journal/tools-seen.txt`.
+- Robinhood may require you to approve each order in its app, depending on your account setting. The agent cannot change that setting.
 - No paper mode is known to exist for Robinhood agentic accounts. Start with a small balance.
 - US market holidays are not detected by the session hook.
 - The file guard blocks trading agents from reading `.env` by name through Read, Grep, and the shell. A shell command that hides the name, such as a wildcard, is not caught by the guard and relies on Claude Code's permission prompt, which asks before every shell command except `sleep`.

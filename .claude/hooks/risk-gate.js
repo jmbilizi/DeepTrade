@@ -38,7 +38,8 @@ function main() {
   const gateSells = L.gateSells(env);
   const reducing = L.isReducing(toolName, toolInput, gateSells);
   const cls = L.assetClass(toolName, toolInput);
-  const symbol = L.findSymbol(toolInput);
+  const resolved = L.orderSymbol(toolInput, L.path.join(dir, "journal", "option-ids.json"));
+  const symbol = resolved.symbol;
 
   if (haltAll) return deny("DEEPTRADE_HALT_ALL is true in .env. Every order tool is blocked, including exits. Only cancels work. Ask the user to change it.");
 
@@ -49,6 +50,26 @@ function main() {
 
   // Opening order from here on.
   if (halt) return deny("DEEPTRADE_HALT is true in .env. New entries are blocked. Exits and cancels still work. Ask the user to set it to false to resume.");
+
+  // Settings edited in .env since the agent was briefed: refuse this entry once
+  // and list the new values, so the agent re-plans with them before retrying.
+  const snapFile = L.path.join(dir, "journal", L.SETTINGS_SNAPSHOT_FILE);
+  const snapNow = L.settingsSnapshot(env);
+  let snapOld = null;
+  try {
+    snapOld = JSON.parse(L.fs.readFileSync(snapFile, "utf8"));
+  } catch {
+    /* none yet */
+  }
+  const changed = snapOld ? L.settingsChanges(snapOld, snapNow) : [];
+  try {
+    if (!snapOld || changed.length) L.fs.writeFileSync(snapFile, JSON.stringify(snapNow), "utf8");
+  } catch {
+    /* if it cannot be saved the next entry reports the change again */
+  }
+  if (changed.length) {
+    return deny(`The user changed .env since this session was briefed: ${changed.join("; ")}. These values now apply. Tell the user in one line, re-check this trade against the new values (size, strategy, symbols, times), then submit again if it still fits.`);
+  }
 
   // Time window.
   const notBefore = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_BEFORE);
@@ -70,8 +91,10 @@ function main() {
   // Symbol lists.
   const blocked = L.csv(env.DEEPTRADE_BLOCKED_SYMBOLS);
   const allowed = L.csv(env.DEEPTRADE_ALLOWED_SYMBOLS);
+  if (!symbol && resolved.unresolved.length && blocked.length) return deny(`DEEPTRADE_BLOCKED_SYMBOLS is set but the risk gate could not tell the underlying of this option order (${resolved.unresolved.join(", ")}). Look the contract up with get_option_instruments in this session so its underlying is recorded, then retry.`);
   if (symbol && blocked.length && L.symbolAllowed(symbol, blocked)) return deny(`${symbol} is in DEEPTRADE_BLOCKED_SYMBOLS. Order refused.`);
   if (allowed.length) {
+    if (!symbol && resolved.unresolved.length) return deny(`DEEPTRADE_ALLOWED_SYMBOLS is set but the risk gate could not tell the underlying of this option order (${resolved.unresolved.join(", ")}). Look the contract up with get_option_instruments in this session so its underlying is recorded, then retry.`);
     if (!symbol) return deny("DEEPTRADE_ALLOWED_SYMBOLS is set but the risk gate could not find a symbol in this order request, so it cannot verify the symbol. Order refused. Include the symbol in a standard field.");
     if (!L.symbolAllowed(symbol, allowed)) return deny(`${symbol} is not in DEEPTRADE_ALLOWED_SYMBOLS (${allowed.join(",")}). Order refused.`);
   } else if (!symbol) {
@@ -88,8 +111,8 @@ function main() {
     notes.push(`Opening orders submitted today before this one: ${todayCount}/${maxOrders}.`);
   }
 
-  // Per-order value cap: the lower of a dollar cap and a percent-of-equity cap.
-  const cap = effectiveCap(env, L.path.join(dir, "journal", "session-state.json"));
+  // Per-order value cap: see effectiveCap.
+  const cap = effectiveCap(env, L.path.join(dir, "journal", L.ACCOUNT_STATE_FILE), L.path.join(dir, "journal", "orders.jsonl"));
   if (cap.denyReason) return deny(cap.denyReason);
   if (cap.note) notes.push(cap.note);
   if (cap.value !== null) {
@@ -105,40 +128,18 @@ function main() {
     } else {
       notes.push(`Estimated order value $${est.value.toFixed(2)} (${est.how}), within the $${cap.value.toFixed(2)} cap (${cap.how}).`);
     }
-  } else {
-    notes.push("No per-order value cap is active. Set DEEPTRADE_MAX_ORDER_USD or DEEPTRADE_MAX_ORDER_PCT in .env.");
   }
 
   L.emit(ctx(notes));
 }
 
-function effectiveCap(env, stateFile) {
-  const maxUsd = L.num(env.DEEPTRADE_MAX_ORDER_USD);
-  const maxPct = L.num(env.DEEPTRADE_MAX_ORDER_PCT);
-  let pctCap = null;
-  let note = null;
-
-  if (maxPct !== null) {
-    const state = L.readState(stateFile);
-    if (state.equity !== null && !state.stale) {
-      pctCap = (maxPct / 100) * state.equity;
-    } else {
-      // The percent cap is configured but cannot be computed. Blocking is the
-      // gate's job, so refuse until the agent refreshes equity.
-      const why = state.equity === null
-        ? "journal/session-state.json has no usable equity"
-        : `journal/session-state.json is ${Math.round(state.ageHours)}h old (limit ${L.STATE_MAX_AGE_HOURS}h)`;
-      return { value: null, how: "none", denyReason: `DEEPTRADE_MAX_ORDER_PCT is set but ${why}, so the percent cap cannot be computed. Fetch the account summary, write {"equity","cash","updated_at"} to journal/session-state.json, then retry.` };
-    }
-    if (maxUsd !== null) {
-      return pctCap <= maxUsd
-        ? { value: pctCap, how: `${maxPct}% of equity $${state.equity.toFixed(2)}, lower than the $${maxUsd} dollar cap`, note }
-        : { value: maxUsd, how: `DEEPTRADE_MAX_ORDER_USD, lower than ${maxPct}% of equity $${state.equity.toFixed(2)}`, note };
-    }
-    return { value: pctCap, how: `${maxPct}% of equity $${state.equity.toFixed(2)}`, note };
+function effectiveCap(env, stateFile, ordersFile) {
+  const cap = L.orderCap(env, L.readState(stateFile), L.lastOrderMs(ordersFile));
+  if (cap.value === null) {
+    // Blocking is the gate's job, so refuse until the agent refreshes the account.
+    return { value: null, how: "none", denyReason: `The per-order cap cannot be computed: ${cap.missing}. Call get_portfolio for the agentic account (after get_accounts at least once this session), then retry. The hook records equity and buying power from that response.` };
   }
-  if (maxUsd !== null) return { value: maxUsd, how: "DEEPTRADE_MAX_ORDER_USD", note };
-  return { value: null, how: "none", note };
+  return cap;
 }
 
 function ctx(notes) {

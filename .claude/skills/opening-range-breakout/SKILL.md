@@ -19,7 +19,7 @@ It is simple to state, easy to verify after the fact, and limited to a narrow wi
 - A fresh quote with bid and ask at decision time.
 - For options: the chain for the chosen expiration with bid, ask, delta, open interest, and volume.
 
-Robinhood's Trading MCP exposes quotes, positions, and orders. At the time of writing it is not known to expose intraday bars or VWAP. If no tool returns bars and VWAP, do not approximate them from polled quotes. Tell the user this strategy cannot run with the connected data sources and offer research mode, or ask them to add a market data MCP that provides bars.
+Robinhood's Trading MCP covers all of it: `get_equity_historicals` with `interval: 5minute` for bars, `get_equity_technical_indicators` with `type: vwap` for VWAP, `get_equity_quotes` for bid and ask, and `get_option_instruments` plus `get_option_quotes` for contracts with bid, ask, delta, open interest, and volume. Ignore bars marked `interpolated`. If those tools fail or return stale data, do not approximate bars from polled quotes. Tell the user and stop trading this strategy.
 
 ## Parameters
 
