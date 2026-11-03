@@ -48,6 +48,7 @@ Defaults in `.env.example` and strategy skills are risk limits chosen to be cons
 ```bash
 claude                      # normal session in the repo
 claude --agent day-trader   # launch the Day Trader for a session
+claude --agent index-0dte-trader  # index ETFs and same-day options; needs DEEPTRADE_ALLOWED_SYMBOLS
 /mcp                        # connect or reconnect Robinhood
 ```
 

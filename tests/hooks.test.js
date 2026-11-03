@@ -338,6 +338,21 @@ check("launcher maps the .env name to the child's variable", lr.stdout === "k-45
 lr = launch({}, [], "");
 check("launcher without arguments exits 2", lr.status === 2);
 
+// Every trading agent (one that preloads order-execution) must carry the file
+// guard and the shared skills, or it could rewrite its own limits.
+const AGENTS = path.join(__dirname, "..", ".claude", "agents");
+for (const f of fs.readdirSync(AGENTS).filter((n) => n.endsWith(".md"))) {
+  const fm = (fs.readFileSync(path.join(AGENTS, f), "utf8").match(/^---\n([\s\S]*?)\n---/) || [, ""])[1];
+  if (!/^\s+-\s+order-execution\s*$/m.test(fm)) continue;
+  check(`agent ${f} carries the protect-files guard`, /PreToolUse:[\s\S]*protect-files\.js[\s\S]*onFailure:\s*block/.test(fm));
+  for (const s of ["trading-preflight", "position-sizing", "trade-journal"]) {
+    check(`agent ${f} preloads ${s}`, new RegExp(`^\\s+-\\s+${s}\\s*$`, "m").test(fm));
+  }
+  for (const s of (fm.match(/^skills:\n((?:\s+-\s+.*\n?)*)/m) || [, ""])[1].split("\n").map((l) => l.replace(/^\s+-\s+/, "").trim()).filter(Boolean)) {
+    check(`agent ${f} skill ${s} exists`, fs.existsSync(path.join(__dirname, "..", ".claude", "skills", s, "SKILL.md")));
+  }
+}
+
 // Tidy the temp project by name, no recursive delete: unlink known files, then
 // remove the now-empty directories.
 for (const f of [".env", ".claude/skills/opening-range-breakout/SKILL.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json", "journal/account-state.json", "journal/option-ids.json", "journal/settings-snapshot.json", "journal/agentic-accounts.json"]) {
