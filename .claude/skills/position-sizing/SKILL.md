@@ -8,7 +8,7 @@ user-invocable: false
 
 The per-order cap decides how big a position is. `DEEPTRADE_RISK_PER_TRADE_PCT` decides the most that position may lose, as a percent of **what the trade cost**, not of the account. Size never comes from conviction.
 
-Example of the difference: a 100 trade in a 2,000 account with `RISK_PER_TRADE_PCT=35` can lose at most 35, never the whole 100. The account is protected by the cap, which limits how big any trade is, and by `DEEPTRADE_DAILY_LOSS_PCT`, which is measured on equity and stops the day.
+Example of the difference: a 100 trade in a 2,000 account with `RISK_PER_TRADE_PCT=25` can lose at most 25, never the whole 100. The account is protected by the cap, which limits how big any trade is, and by `DEEPTRADE_DAILY_LOSS_PCT`, which is measured on equity and stops the day.
 
 ## Inputs
 
@@ -36,7 +36,7 @@ ceiling_stop = entry * (1 - ceiling_pct / 100)          long positions
 stop         = max(strategy_stop, ceiling_stop)          the tighter one, closer to entry
 ```
 
-The ceiling is a limit, not a target. Exits normally come from the strategy and the trade-management ladder long before it. When the ceiling is tighter than the strategy's stop, say so on the trade card: the strategy's stop did not fit the ceiling. Never move the stop beyond the ceiling to give a trade room.
+The ceiling is the most you accept losing while the setup still looks valid. It is a limit, not a target: when the setup breaks (trade-management's reversal exit), exit at once, well before the ceiling. Exits normally come from the strategy and the trade-management ladder long before it. When the ceiling is tighter than the strategy's stop, say so on the trade card: the strategy's stop did not fit the ceiling. Never move the stop beyond the ceiling to give a trade room.
 
 For shares, a strategy's structural stop is almost always far tighter than a percent ceiling, so the strategy's stop decides.
 
@@ -74,4 +74,4 @@ loss_at_stop = units * (entry - stop) * 100        options
 
 Illustrative only: made-up numbers.
 
-Equity 1,000, buying power 1,000. Only `MAX_ORDER_USD=200` is set and buying power covers it, so cap = 200. `RISK_PER_TRADE_PCT=35`. A same-day call asks 0.99, and the strategy's premium stop is 0.50. Contracts = floor(200 / 99) = 2, notional 198. Ceiling stop = 0.99 × 0.65 = 0.6435, rounded toward the entry: 0.65. Stop = max(0.50, 0.65) = 0.65, so the ceiling decides. Loss at stop = 2 × 0.34 × 100 = 68, which is 34% of the trade and 6.8% of equity. With `DAILY_LOSS_PCT=20` (200), three full losses fit in one day.
+Equity 1,000, buying power 1,000. Only `MAX_ORDER_USD=200` is set and buying power covers it, so cap = 200. `RISK_PER_TRADE_PCT=25`. A same-day call asks 0.99, and the strategy's premium stop is 0.50. Contracts = floor(200 / 99) = 2, notional 198. Ceiling stop = 0.99 × 0.75 = 0.7425, rounded toward the entry: 0.75. Stop = max(0.50, 0.75) = 0.75, so the ceiling decides. Loss at stop = 2 × 0.24 × 100 = 48, which is 24% of the trade and 4.8% of equity. With `DAILY_LOSS_PCT=20` (200), four full losses fit in one day.

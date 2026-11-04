@@ -39,12 +39,26 @@ Stages only move forward. A stop only moves toward the price, never away. A stra
 
 | Stage | Trigger | Stop on what is left |
 | --- | --- | --- |
-| 0. Open | Fill | Strategy stop on the underlying, premium stop as backstop. Do not tighten. A same-day option can drop 30% on noise right after entry. |
+| 0. Open | Fill | Strategy stop on the underlying, premium stop (the loss ceiling) as backstop. Do not tighten on noise: a same-day option can drop 30% right after entry. A confirmed reversal still exits at once (below). |
 | 1. Banked | Bid reaches `take_profit` once, or the take-profit order fills | Breakeven: exit if the bid falls to `entry_premium` (shares: to entry). Strategy stop still applies if tighter. |
 | 2. Running | Bid reaches `entry_premium + 1.5 × R_prem` | Giveback: exit if the bid falls below `peak - 0.4 × (peak - entry_premium)`, that is, keep 60% of the best open gain. |
 | 3. Late | Any stage, under 60 minutes to the contract's sellout (shares: to the agent's flat time) | Giveback tightens to 25% of the best open gain. |
 
 On top of the ladder, from stage 1 on, a short-timeframe counter-trend exit (below) closes the rest.
+
+### The ceiling is not a target
+
+The premium stop, `DEEPTRADE_RISK_PER_TRADE_PCT` of the trade's cost, is the most a trade may lose **while its setup still looks valid**. It is never a level to wait for. Once the setup is broken, the reason for holding is gone: exit at once, at any stage, in profit or in loss, wherever the price is.
+
+### Reversal exit (any stage, including stage 0)
+
+Exit the whole position as soon as any one of these is true. Each is a confirmed reversal, not noise:
+
+1. **Invalidation.** The strategy's own invalidation fires (for example, index-trend-scalp: a 5-minute close back through VWAP).
+2. **Opposite signal.** Any enabled strategy gives an entry signal in the opposite direction (for example, index-trend-scalp setup B the other way, or the opposite noise band breaking). In team mode, a partner's `FLIP` counts.
+3. **Structure break.** On the underlying, a completed 5-minute bar closes beyond the last 5-minute swing point against the trade (below the last swing low for a long) **and** on the wrong side of VWAP. Two independent reads must agree.
+
+A single 1-minute bar, a wick, or the premium dipping on its own is not a reversal; in stage 0 only the three conditions above, the strategy stop, and the ceiling close the trade. After a reversal exit, the strategy's re-entry and flip rules decide what is next, including taking the other side.
 
 **Momentum take-profit before the bank price.** A trade does not have to reach `take_profit`. In stage 0, if the bid is at least `entry_premium + 0.5 × R_prem` and the short-timeframe counter-trend exit fires, take the profit: the move that was paying is turning. Re-entry is the strategy's call, so this is a pause, not the end of the trend.
 
@@ -91,4 +105,6 @@ On the trade card: `R_prem`, `R_und`, `take_profit`, the bank-order id ending, e
 
 Illustrative only: made-up contract, made-up numbers.
 
-Bought 1 call at 1.00 with a 35% loss ceiling, premium stop 0.65, so `R_prem` = 0.35 and `take_profit` = 1.35. A stop_market rests at 0.65. The bid dips to 0.72 (stage 0, hold), then reaches 1.27 (+0.75R): cancel the stop, rest a limit sell at 1.35. It spikes to 1.40 and the bank order fills at 1.35: +0.35 per contract, +1R. With 2 contracts instead: 1 sells at 1.35, stop on the other moves to 1.00. The bid reaches 1.53 (+1.5R, stage 2) and peaks at 1.80, so the giveback floor is 1.80 − 0.4 × 0.80 = 1.48. The bid falls to 1.46: sell the second at about 1.46.
+Bought 1 call at 1.00 with a 25% loss ceiling, premium stop 0.75, so `R_prem` = 0.25 and `take_profit` = 1.25. A stop_market rests at 0.75. The bid dips to 0.80 (stage 0; no reversal condition, hold), then reaches 1.19 (+0.75R): cancel the stop, rest a limit sell at 1.25. It spikes to 1.30 and the bank order fills at 1.25: +0.25 per contract, +1R. With 2 contracts instead: 1 sells at 1.25, stop on the other moves to 1.00. The bid reaches 1.38 (+1.5R, stage 2) and peaks at 1.80, so the giveback floor is 1.80 − 0.4 × 0.80 = 1.48. The bid falls to 1.46: sell the second at about 1.46.
+
+Losing case: bought at 1.00, stop 0.75. The bid is 0.88 when a 5-minute bar closes below the last swing low and below VWAP. That is a structure break: sell now at about 0.88 (−0.12, not −0.25). Then wait for the next signal, either way.

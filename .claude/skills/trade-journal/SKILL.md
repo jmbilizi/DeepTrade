@@ -29,8 +29,8 @@ One card per trade, written **before** the entry order is sent and completed aft
 
 - Setup: 5m close 132.40 above ORH 132.05 (ORL 130.80, range 1.25 = 0.95%), vol 1.9x, VWAP 131.60.
 - Entry limit 132.15  Stop 130.80  Target 133.93 (ORH + 1.5 x range)  Risk/sh 1.35  Reward/sh 1.78  R:R 1.32
-- Size 3.02 sh from the cap $400 (10% of $4,000 equity). Loss at stop $4.08 (1.0% of the trade, inside the 35% ceiling; 0.1% of equity).
-- Settings: STRATEGIES includes opening-range-breakout; RISK_PER_TRADE_PCT 35 (loss ceiling, % of trade); instrument equity (first allowed class).
+- Size 3.02 sh from the cap $400 (10% of $4,000 equity). Loss at stop $4.08 (1.0% of the trade, inside the 25% ceiling; 0.1% of equity).
+- Settings: STRATEGIES includes opening-range-breakout; RISK_PER_TRADE_PCT 25 (loss ceiling, % of trade); instrument equity (first allowed class).
 - Risk gate: passed, est $399.09 within $400.00.
 - Fill: 132.15 at 10:05:41.
 - Exit: 133.93 target at 10:52. Result +$5.38, +1.32R.

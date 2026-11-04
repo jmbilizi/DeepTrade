@@ -113,7 +113,7 @@ function checkSettings(dir, env, plan) {
   // were normal; as a percent of the trade they put the stop inside the noise.
   const risk = L.num(plan.DEEPTRADE_RISK_PER_TRADE_PCT.value);
   if (risk !== null && risk > 100) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} is over 100. It is the most one trade may lose, in percent of what the trade cost.`);
-  else if (risk !== null && risk > 0 && risk < 15) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} now means the most one trade may lose in percent of the trade's own cost, not of equity. ${risk}% of a same-day option is inside its normal noise, so stops would be hit almost at once. If this was set under the old equity meaning, ask the user to change it (default 35).`);
+  else if (risk !== null && risk > 0 && risk < 15) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} now means the most one trade may lose in percent of the trade's own cost, not of equity. ${risk}% of a same-day option is inside its normal noise, so stops would be hit almost at once. If this was set under the old equity meaning, ask the user to change it (default 25).`);
   // One full loss (the per-order cap times the ceiling) must fit in the daily
   // loss limit, or position-sizing shrinks every trade to nothing.
   const daily = L.num(plan.DEEPTRADE_DAILY_LOSS_PCT.value);

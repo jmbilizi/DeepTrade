@@ -220,7 +220,7 @@ setState({ equity: 1000000, buying_power: 1000000, cash: 1000000, updated_at: ne
 setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99 });
 expect("first entry with no snapshot passes and takes one", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
 setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99, DEEPTRADE_RISK_PER_TRADE_PCT: "40" }, { keepSnapshot: true });
-expect("plan edited mid-session -> entry refused once with the new value", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "DEEPTRADE_RISK_PER_TRADE_PCT: 35 -> 40");
+expect("plan edited mid-session -> entry refused once with the new value", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "DEEPTRADE_RISK_PER_TRADE_PCT: 25 -> 40");
 expect("retry after the change was reported passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
 setEnv({ ...BASE, DEEPTRADE_MAX_ORDERS_PER_DAY: 99, DEEPTRADE_RISK_PER_TRADE_PCT: "40", UNUSUAL_WHALES_API_KEY: "secret-xyz" }, { keepSnapshot: true });
 expect("an API key change is never reported or blocking", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
@@ -468,11 +468,11 @@ fs.unlinkSync(path.join(ROOT, ".claude", "settings.local.json"));
 check("session-start: consistent team mode raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2", DEEPTRADE_EXPOSURE_GUARD: "true", DEEPTRADE_ALLOWED_ASSET_CLASSES: "option" })));
 check("session-start reports exposure guard", /exposure_guard=true/.test(ssCtx({ DEEPTRADE_EXPOSURE_GUARD: "true" })));
 check("session-start reports manage cadence default", /manage_every_min=1 \(default\)/.test(ssCtx({})));
-check("session-start: risk default is 35 (percent of the trade)", /risk_per_trade_pct=35 \(default\)/.test(ssCtx({})));
+check("session-start: risk default is 25 (percent of the trade)", /risk_per_trade_pct=25 \(default\)/.test(ssCtx({})));
 check("session-start: an old equity-style risk value is flagged", /DEEPTRADE_RISK_PER_TRADE_PCT=5 now means the most one trade may lose/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "5" })));
 check("session-start: risk over 100 is flagged", /DEEPTRADE_RISK_PER_TRADE_PCT=150 is over 100/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "150" })));
 check("session-start: a daily limit under one full loss is flagged", /DEEPTRADE_DAILY_LOSS_PCT=1.5 is less than one full loss/.test(ssCtx({ DEEPTRADE_DAILY_LOSS_PCT: "1.5" })));
-check("session-start: risk 35 raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "35" })));
+check("session-start: risk 25 raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "25" })));
 c = ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "abc" });
 check("session-start flags non-numeric risk", /DEEPTRADE_RISK_PER_TRADE_PCT=abc must be a positive number/.test(c));
 

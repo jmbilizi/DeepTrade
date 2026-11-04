@@ -72,7 +72,7 @@ At the first of:
 
 - **Stop:** a completed 1-minute bar closes beyond the stop on the underlying.
 - **Fast move:** any trade 0.5 × ATR beyond the stop. Exit at once.
-- **Invalidation:** for setup A, a 5-minute close below VWAP. For setup B, a 5-minute close back below VWAP.
+- **Invalidation:** for setup A, a 5-minute close below VWAP. For setup B, a 5-minute close back below VWAP. This and the other trade-management reversal exits fire at any stage, in loss too: do not wait for the stop or the ceiling once the setup is broken.
 - **Target** on the underlying.
 - Any trade-management exit: premium stop, bank order, breakeven, giveback, counter-trend, time stop.
 - The agent's effective flat time.
@@ -141,4 +141,4 @@ On the trade card, before the order: setup letter, trend state, chop flag inputs
 
 Illustrative only: made-up symbol XYZ, made-up numbers.
 
-10:40. XYZ trend state up, ATR(14, 5m) 0.80, VWAP 500.20, EMA(20) 500.35. The 10:30 bar's low was 500.42, within 0.25 × 0.80 = 0.20 of EMA(20). The 10:35 bar closes 501.10, above EMA(9) 500.80 and the prior high 500.95. Setup A long. Stop 500.42 − 0.08 = 500.34, `R_und` 0.76 (0.95 ATR, inside the range). Target 502.62. The 501 call: mid 1.20, delta 0.50. Structural premium stop 1.20 − 1.5 × 0.50 × 0.76 = 0.63, under the 0.84 noise limit, so 0.63. A 35% ceiling gives 0.78, which is tighter, so the stop is 0.78: `R_prem` 0.42, bank at 1.62. Cap 200: 1 contract (2 would cost 240).
+10:40. XYZ trend state up, ATR(14, 5m) 0.80, VWAP 500.20, EMA(20) 500.35. The 10:30 bar's low was 500.42, within 0.25 × 0.80 = 0.20 of EMA(20). The 10:35 bar closes 501.10, above EMA(9) 500.80 and the prior high 500.95. Setup A long. Stop 500.42 − 0.08 = 500.34, `R_und` 0.76 (0.95 ATR, inside the range). Target 502.62. The 501 call: mid 1.20, delta 0.50. Structural premium stop 1.20 − 1.5 × 0.50 × 0.76 = 0.63, under the 0.84 noise limit, so 0.63. A 25% ceiling gives 0.90, which is tighter, so the stop is 0.90: `R_prem` 0.30, bank at 1.50. Cap 200: 1 contract (2 would cost 240).
