@@ -40,7 +40,7 @@ Start before 09:25 market time so the first check of the day is not missed. Run 
 1. If `ALLOWED_SYMBOLS` is unset, stop and tell the user this agent trades only an explicit list of index ETFs and the setting must name them. Do not scan.
 2. For each allowed symbol, confirm a same-day expiration exists, as each enabled strategy skill describes. Drop any symbol the strategies cannot trade today and say so.
 3. Create today's journal note per the trade-journal skill. Read the last session's Review and any post-session study in the journal, and carry its open items into today's plan.
-4. State the plan in five lines: check cadence per strategy and the effective flat time, symbols, strategies and asset classes in preference order, risk per trade, max positions.
+4. State the plan in five lines: check cadence per strategy and the effective flat time, symbols, strategies and asset classes in preference order, per-order cap and loss ceiling per trade (percent of the trade), max positions.
 
 ## Session loop
 

@@ -118,10 +118,10 @@ Supports `option` and `equity`. Use the first class in `DEEPTRADE_ALLOWED_ASSET_
 | Liquidity | Open interest ≥ 1,000 and today's volume ≥ 1,000 |
 | Spread | Ask minus bid ≤ 5% of the mid |
 | Entry | Limit at the mid, never above the ask. Cancel if not filled in 2 minutes. Do not chase |
-| Premium stop | `premium − 1.5 × delta × R_und`, clamped between `0.5 × premium` and `0.7 × premium`, rounded to the tick toward the entry. The loss to the stop is never under 30% (premium noise right after entry) or over 50% |
-| Size | position-sizing with the premium stop, then the index-pair-read tier |
+| Premium stop | Structural: `premium − 1.5 × delta × R_und`, but not tighter than `0.7 × premium` (premium noise right after entry). Then position-sizing applies the loss ceiling: the stop is never looser than `premium × (1 − DEEPTRADE_RISK_PER_TRADE_PCT / 100)`. Round to the tick toward the entry |
+| Size | position-sizing (contracts from the per-order cap), then the index-pair-read tier |
 
-The premium stop tracks the underlying stop, so a tight structural stop allows more contracts for the same dollar risk, and with 2 or more contracts the bank order can sell half.
+The premium stop tracks the underlying stop inside the ceiling. Size comes from the per-order cap, so a cheaper contract means more contracts, and with 2 or more the bank order can sell half.
 
 **Equity.** Shares, sized by position-sizing on `R_und`. Shorts only if `DEEPTRADE_ALLOW_SHORTS` is true.
 
@@ -141,4 +141,4 @@ On the trade card, before the order: setup letter, trend state, chop flag inputs
 
 Illustrative only: made-up symbol XYZ, made-up numbers.
 
-10:40. XYZ trend state up, ATR(14, 5m) 0.80, VWAP 500.20, EMA(20) 500.35. The 10:30 bar's low was 500.42, within 0.25 × 0.80 = 0.20 of EMA(20). The 10:35 bar closes 501.10, above EMA(9) 500.80 and the prior high 500.95. Setup A long. Stop 500.42 − 0.08 = 500.34, `R_und` 0.76 (0.95 ATR, inside the range). Target 502.62. The 501 call: mid 1.20, delta 0.50. Premium stop 1.20 − 1.5 × 0.50 × 0.76 = 0.63, inside the 0.60 to 0.84 clamp, so 0.63. `R_prem` 0.57, bank at 1.77. Risk budget 60: 1 contract.
+10:40. XYZ trend state up, ATR(14, 5m) 0.80, VWAP 500.20, EMA(20) 500.35. The 10:30 bar's low was 500.42, within 0.25 × 0.80 = 0.20 of EMA(20). The 10:35 bar closes 501.10, above EMA(9) 500.80 and the prior high 500.95. Setup A long. Stop 500.42 − 0.08 = 500.34, `R_und` 0.76 (0.95 ATR, inside the range). Target 502.62. The 501 call: mid 1.20, delta 0.50. Structural premium stop 1.20 − 1.5 × 0.50 × 0.76 = 0.63, under the 0.84 noise limit, so 0.63. A 35% ceiling gives 0.78, which is tighter, so the stop is 0.78: `R_prem` 0.42, bank at 1.62. Cap 200: 1 contract (2 would cost 240).

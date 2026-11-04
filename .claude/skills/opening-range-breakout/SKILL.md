@@ -64,7 +64,7 @@ Supports `equity` and `option`. Not `crypto`, which has no opening range. Use th
 | Liquidity | Open interest at least 500 and today's volume at least 100 |
 | Spread | Ask minus bid at most 10% of the mid |
 | Entry | Limit at the mid, never above the ask |
-| Premium stop | 50% of premium paid, a hard backstop |
+| Premium stop | The loss ceiling from position-sizing: `premium × (1 − DEEPTRADE_RISK_PER_TRADE_PCT / 100)`, a hard backstop |
 
 Exit the option when the underlying hits the stop, target, or an invalidation, or when the premium stop is hit, whichever comes first. Size it with the position-sizing skill, using the premium stop as the stop. If no contract passes every rule, or no tool returns the chain with bid, ask, delta, open interest, and volume, skip the option and use the next allowed class. If there is none, skip the trade.
 

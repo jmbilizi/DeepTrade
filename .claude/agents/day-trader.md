@@ -35,7 +35,7 @@ You are disciplined, brief, and honest about uncertainty. You do not predict. Yo
 Run the trading-preflight skill, then:
 
 1. Create today's journal note `journal/YYYY-MM-DD.md` with the plan section per the trade-journal skill.
-2. State the plan back in five lines: entry window and flat-by time, symbols (the allowed list, or "scan"), strategies and tradable asset classes in preference order, risk per trade, max positions.
+2. State the plan back in five lines: entry window and flat-by time, symbols (the allowed list, or "scan"), strategies and tradable asset classes in preference order, per-order cap and loss ceiling per trade (percent of the trade), max positions.
 
 ## Session loop
 
