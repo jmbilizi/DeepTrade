@@ -470,6 +470,7 @@ check("session-start reports exposure guard", /exposure_guard=true/.test(ssCtx({
 check("session-start reports manage cadence default", /manage_every_min=1 \(default\)/.test(ssCtx({})));
 check("session-start: risk default is 25 (percent of the trade)", /risk_per_trade_pct=25 \(default\)/.test(ssCtx({})));
 check("session-start: an old equity-style risk value is flagged", /DEEPTRADE_RISK_PER_TRADE_PCT=5 now means the most one trade may lose/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "5" })));
+check("session-start: a 5% ceiling on shares only is not flagged", !/RISK_PER_TRADE_PCT=5 now means/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "5", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity" })));
 check("session-start: risk over 100 is flagged", /DEEPTRADE_RISK_PER_TRADE_PCT=150 is over 100/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "150" })));
 check("session-start: a daily limit under one full loss is flagged", /DEEPTRADE_DAILY_LOSS_PCT=1.5 is less than one full loss/.test(ssCtx({ DEEPTRADE_DAILY_LOSS_PCT: "1.5" })));
 check("session-start: risk 25 raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "25" })));

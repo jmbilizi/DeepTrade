@@ -95,7 +95,7 @@ Supports `equity` and `option`. Use the first class in `DEEPTRADE_ALLOWED_ASSET_
 | Entry | Limit at the mid, never above the ask |
 | Premium stop | The loss ceiling from position-sizing: `premium × (1 − DEEPTRADE_RISK_PER_TRADE_PCT / 100)`, a hard backstop. The underlying stop usually exits first |
 | Size | Usually 1 contract. More only if position-sizing allows it and the cost still fits the cap |
-| Time exit | Close by `min(DEEPTRADE_FLAT_BY, contract sellout_datetime − 10 minutes)` |
+| Time exit | Close by the effective flat time |
 
 The broker force-closes same-day contracts at the contract's `sellout_datetime` from `get_option_instruments`, which can be earlier than `DEEPTRADE_FLAT_BY`. Always read it at entry and record it on the trade card.
 
@@ -105,8 +105,8 @@ Size with position-sizing. The per-order cap sets the contract count. The premiu
 
 The signal is the trend; the contract only expresses it. Pick the strike closest to the money where one contract fits the budget:
 
-1. Start at the strike nearest the last price: the first strike at or above it for calls, at or below it for puts.
-2. One contract costs the ask × 100. If that is at or under the per-order cap and the cash available, and the contract passes the liquidity and spread rules, take it.
+1. Start at the strike nearest the last price. For calls, that is the first strike at or above it; for puts, at or below it.
+2. One contract costs the ask × 100. Take the contract if it fits the per-order cap and the cash, and passes the liquidity and spread rules.
 3. Otherwise step one strike further out of the money, in the trade's direction, and repeat.
 4. Stop stepping when delta falls below 0.20. A contract that far out needs a large move to break even before the close. The trend can be right and the trade can still lose. If no strike passes by then, skip the signal and journal "no affordable contract".
 
@@ -135,4 +135,4 @@ Before the order: open, prior close, sigma(t), upper and lower, VWAP, last price
 
 Illustrative only: made-up symbol XYZ, made-up numbers.
 
-Open 500.00, prior close 499.00. At 10:30, sigma = 0.0030. Upper = 500.00 × 1.003 = 501.50. Lower = 499.00 × 0.997 = 497.50. Last 501.80, VWAP 500.90. Long signal. Stop = max(501.50, 500.90) = 501.50, risk 0.30. Target = 501.50 + 1 × 0.0030 × 500 = 503.00, reward 1.20. R:R 4.0, passes. Per-order cap 200. The 502 call asks 1.60, so one contract costs 160 and fits. If it had asked 2.40, the walk would try 503, then 504, and so on, until one fit or delta fell below 0.20. Say 502 at mid 1.60, delta 0.45, spread 0.02, OI 8,000, volume 20,000: buy 1 at a 1.60 limit (2 would cost 320, over the cap). With a 25% ceiling the premium stop is 1.20, so 40 at risk.
+Open 500.00, prior close 499.00. At 10:30, sigma = 0.0030. Upper = 500.00 × 1.003 = 501.50. Lower = 499.00 × 0.997 = 497.50. Last 501.80, VWAP 500.90. Long signal. Stop = max(501.50, 500.90) = 501.50, risk 0.30. Target = 501.50 + 1 × 0.0030 × 500 = 503.00, reward 1.20. R:R 4.0, passes. Per-order cap 200. The 502 call asks 1.60, so one contract costs 160 and fits. If it had asked 2.40, the walk would try 503, then 504, and so on, until one fit or delta fell below 0.20. Say 502 at mid 1.60, delta 0.45, spread 0.02, OI 8,000, volume 20,000: buy 1 at a 1.60 limit (2 would cost 320, over the cap). With a 25% loss ceiling the premium stop is 1.20, so 40 at risk.

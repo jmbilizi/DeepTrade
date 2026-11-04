@@ -42,7 +42,7 @@ For a long signal in the candidate (mirror for bearish):
 1. The candidate makes a new session high.
 2. The witness made a session high in the last 60 minutes.
 3. The witness makes no new high within 15 minutes.
- The trade-management ladder treats it as a reason to tighten: move to the stage-1 breakeven stop at once, if the position is in profit. Divergence never opens a trade and never moves a stop away from price.
+ If the position is in profit, move to the breakeven stop at once. Reason: divergence is a warning, not a reversal. Divergence never opens a trade and never moves a stop away from price.
 
 ## Picking the instrument
 

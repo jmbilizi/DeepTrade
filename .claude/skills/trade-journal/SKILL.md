@@ -18,7 +18,7 @@ Two records exist. The hook writes one automatically. You write the other.
 
 ### Plan
 
-Written before the open. The output of the premarket-scan skill, plus the day's key numbers from the session context: equity at start, the per-order cap and the loss ceiling in dollars at that cap, max positions, flat-by time, and the guardrails reported at session start.
+Written before the open. It holds the premarket-scan output and the day's key numbers: start equity, the per-order cap, the loss ceiling in dollars at that cap, max positions, flat-by time, and the session's guardrails.
 
 ### Trades
 
@@ -29,7 +29,7 @@ One card per trade, written **before** the entry order is sent and completed aft
 
 - Setup: 5m close 132.40 above ORH 132.05 (ORL 130.80, range 1.25 = 0.95%), vol 1.9x, VWAP 131.60.
 - Entry limit 132.15  Stop 130.80  Target 133.93 (ORH + 1.5 x range)  Risk/sh 1.35  Reward/sh 1.78  R:R 1.32
-- Size 3.02 sh from the cap $400 (10% of $4,000 equity). Loss at stop $4.08 (1.0% of the trade, inside the 25% ceiling; 0.1% of equity).
+- Size 3.02 sh from the cap $400 (10% of $4,000 equity). Loss at stop $4.08 (1.0% of the trade, inside the 25% loss ceiling; 0.1% of equity).
 - Settings: STRATEGIES includes opening-range-breakout; RISK_PER_TRADE_PCT 25 (loss ceiling, % of trade); instrument equity (first allowed class).
 - Risk gate: passed, est $399.09 within $400.00.
 - Fill: 132.15 at 10:05:41.
@@ -59,7 +59,7 @@ Written after flat. Keep it to ten lines.
 
 ## Reviewing past sessions
 
-When asked, read the last N daily notes and `orders.jsonl`, reconcile them, and report: win rate, average R, largest loss, most common rule break, and whether skipped signals would have helped or hurt. Numbers only from the files. If the files disagree, say which one you trusted and why.
+When asked, read the last N daily notes and `orders.jsonl`, and reconcile them. Report: win rate, average R, largest loss, most common rule break, and whether skipped signals would have helped. Numbers only from the files. If the files disagree, say which one you trusted and why.
 
 ## Hygiene
 

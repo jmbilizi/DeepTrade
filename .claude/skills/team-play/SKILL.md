@@ -70,7 +70,7 @@ Find your role from the board and the broker at each check:
 | --- | --- | --- |
 | The team holds nothing | `WATCH` | Any strategy signal, either direction |
 | You hold a position | `HOLD` | Nothing. Manage it with trade-management |
-| Your partner holds a position | `HUNT` | Only the opposite direction, only on an opposite signal |
+| Your partner holds a position | `HUNT` | Only the opposite direction, only on a flip (below) |
 
 In `WATCH`, both members test every setup. The first entry through the gate takes it. The gate refuses the other, which stands down.
 
@@ -79,9 +79,10 @@ In `WATCH`, both members test every setup. The first entry through the gate take
 Catch the confirmed reversal early.
 
 1. Read the board and the tape every `MANAGE_EVERY_MIN` minutes, not only at strategy checks.
-2. Test for an opposite signal, as trade-management defines it. "It looks toppy" is not a signal.
+2. Test for a flip: an opposite entry signal that passes the strategy's flip rules. For index-trend-scalp, that is setup B only, once per symbol per hour for the team, never on an exit bar. "It looks toppy" is not a signal.
 3. When your partner's trade-management exits fire (counter-trend exit, giveback), post a `NOTE`.
-4. On an opposite signal: add the `FLIP` line, then enter by the order-execution fast path. You now `HOLD`.
+4. On a flip: add the `FLIP` line, then enter by the order-execution fast path. You now `HOLD`.
+5. An opposite signal that fails the flip rules is not a flip. It is still a reversal exit for the holder: post a `NOTE`.
 
 ## HOLD and the flip
 
@@ -93,7 +94,7 @@ Catch the confirmed reversal early.
 
 Close and change only the positions and orders you opened. Two exceptions:
 
-1. A `FLIP` is on the board, the partner's position is still open 2 minutes later, and the partner posted nothing since. Close it, and post a `NOTE`.
+1. A `FLIP` is on the board. The partner's position is still open 2 minutes later, with no partner post since. Close it, and post a `NOTE`.
 2. At the effective flat time, each member closes every position and cancels every order on the account. Then confirm the account is flat.
 
 ## Team limits

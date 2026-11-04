@@ -10,8 +10,8 @@ Terms are defined in trading-terms. The strategy decides what to trade. This ski
 
 ## Checks before an entry
 
-1. **Account read.** Call `get_portfolio` for the agentic account. The gate refuses an entry when that read is over 2 minutes old, or older than the last order or cancel by any agent.
-2. **Exposure reads.** If the session context shows `exposure_guard=true`, call these in the same message as step 1, before an option entry:
+1. **Account read.** Call `get_portfolio` for the agentic account. The gate refuses an entry when that read is over 2 minutes old. It also refuses one older than any agent's last order.
+2. **Exposure reads.** With `exposure_guard=true`, make these reads in the same message as step 1:
    - `get_option_positions` with `account_number` and `nonzero: true`.
    - `get_option_orders` with `account_number` and `created_at_gte` = today's date.
    - If a read returns a `next` cursor, read each next page at once with `cursor`. The gate counts only a complete run of pages.
@@ -26,7 +26,7 @@ Terms are defined in trading-terms. The strategy decides what to trade. This ski
 
 Send an order seconds after the signal. Reason: on 2026-11-03 an entry took 80 seconds and an exit took 22. Do the slow work before the trigger.
 
-1. **Arm.** When a setup forms (for example, the price is within 0.5 × ATR of a trigger), write an armed card: trigger, direction, strategy stop, target, premium stop rule, and size. The armed card is the trade card the rules require before an order. Look up the contract for each armed direction with `get_option_instruments`, so the gate knows its id.
+1. **Arm.** When a setup forms, write an armed card. Example: the price is within 0.5 × ATR of a trigger. The card holds: trigger, direction, strategy stop, target, premium stop rule, and size. The armed card is the trade card the rules require before an order. Look up the contract for each armed direction with `get_option_instruments`, so the gate knows its id.
 2. **Read in parallel.** Put every independent read in one message: indicators, quotes for each symbol, option quotes, and `get_portfolio`.
 3. **Fire.** On the trigger, in one message: the option quote, `get_portfolio`, and the exposure reads if the guard is on. Then call `review_option_order`. If it raises no alert, call `place_option_order` at once. Add one line to the armed card: trigger time, quote, and limit. Do not recalculate the plan.
 4. **Disarm** when the setup fails or its check time passes. Add one line saying why. An armed card that never fired is a skipped-signal card.
@@ -61,7 +61,8 @@ Read the reason. Journal it. Tell the user. Never resubmit with different fields
 | --- | --- |
 | Stale account read | Call `get_portfolio`. Resubmit unchanged. |
 | Exposure reads stale, missing, or incomplete | Do the exposure reads again. Resubmit unchanged. |
-| Order lock | Wait a few seconds. Do the reads again. Check the plan. Resubmit if it still fits. |
+| Order lock, single agent | Wait a few seconds. Do the reads again. Check the plan. Resubmit if it still fits. |
+| Order lock or exposure, team mode | Your partner got there first. Do not retry that entry. Read the board (team-play). |
 | `.env` changed | Tell the user the new values in one line. Check the trade against them. Resubmit only if it still fits. |
 | Anything else | Do not resubmit. |
 

@@ -131,7 +131,7 @@ Supports `option` and `equity`. Use the first class in `ALLOWED_ASSET_CLASSES` t
 | Liquidity | Open interest ≥ 1,000 and today's volume ≥ 1,000. |
 | Spread | Ask minus bid ≤ 5% of mid (Late session can tighten it). |
 | Entry | A limit at the mid, never above the ask. Cancel it if not filled in 2 minutes. Do not chase. |
-| Strategy premium stop | `premium − 1.5 × delta × stop distance`, but not above `0.7 × premium`. Reason: premium noise right after entry. position-sizing then applies the loss ceiling. |
+| Strategy premium stop | `premium − 1.5 × delta × stop distance`, but not above `0.8 × premium` (a 20% loss). Reason: premium noise right after entry. Then position-sizing applies the loss ceiling. At the default 25%, the loss ceiling usually decides. The strategy stop on the underlying still applies. |
 | Size | position-sizing, then the index-pair-read tier. |
 
 **Equity.** Shares, sized by position-sizing. Shorts only if `ALLOW_SHORTS` is true.
@@ -155,6 +155,6 @@ Illustrative only: made-up symbol XYZ, made-up numbers.
 10:40. XYZ trend state up, ATR(14, 5m) 0.80, VWAP 500.20, EMA(20) 500.35. The 10:30 bar's low was 500.42, within 0.20 of EMA(20). The 10:35 bar closes 501.10, above EMA(9) 500.80 and the prior high 500.95. Setup A long.
 
 - Strategy stop 500.42 − 0.08 = 500.34. Stop distance 0.76 (0.95 ATR, inside the range). Target 502.62.
-- The 501 call: mid 1.20, delta 0.50. Strategy premium stop 1.20 − 1.5 × 0.50 × 0.76 = 0.63, under the 0.84 limit, so 0.63.
+- The 501 call: mid 1.20, delta 0.50. Strategy premium stop 1.20 − 1.5 × 0.50 × 0.76 = 0.63, under the 0.96 limit, so 0.63.
 - Loss ceiling 25%: 0.90. That is tighter, so the premium stop is 0.90. R = 0.30. Bank price 1.50.
 - Per-order cap 200: 1 contract (2 would cost 240).

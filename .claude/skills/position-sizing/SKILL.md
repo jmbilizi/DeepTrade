@@ -32,13 +32,15 @@ The session context states which rule is active. The risk gate applies the same 
 ## The stop: the tighter of two
 
 ```text
-ceiling_stop = entry * (1 - ceiling_pct / 100)          long positions
-stop         = max(strategy_stop, ceiling_stop)          the tighter one, closer to entry
+long:   ceiling_stop = entry * (1 - ceiling_pct / 100)    stop = max(strategy_stop, ceiling_stop)
+short:  ceiling_stop = entry * (1 + ceiling_pct / 100)    stop = min(strategy_stop, ceiling_stop)
 ```
+
+The stop is the one closer to entry.
 
 The loss ceiling is the most you accept losing while the setup still looks valid. It is a limit, not a target: when the setup breaks (trade-management's reversal exit), exit at once, well before the loss ceiling. Exits normally come from the strategy and the trade-management ladder long before it. When the loss ceiling is tighter than the strategy's stop, say so on the trade card: the strategy's stop did not fit the loss ceiling. Never move the stop beyond the loss ceiling to give a trade room.
 
-For shares, a strategy's structural stop is almost always far tighter than a percent ceiling, so the strategy's stop decides.
+For shares, a strategy's structural stop is almost always far tighter than the loss ceiling, so the strategy's stop decides.
 
 ## Size
 
@@ -56,18 +58,18 @@ units     = min(units, cash / unit_cost)
 ## What it can lose
 
 ```text
-loss_at_stop = units * (entry - stop)              shares
-loss_at_stop = units * (entry - stop) * 100        options
+loss_at_stop = units * abs(entry - stop)              shares, long or short
+loss_at_stop = units * abs(entry - stop) * 100        options
 ```
 
-`loss_at_stop` is at most `ceiling_pct` of the trade's cost by construction. State it on the trade card in dollars and as a percent of equity.
+`loss_at_stop` is at most `ceiling_pct` of the trade's cost. State it on the trade card in dollars and as a percent of equity. It is the planned maximum. Sometimes no stop rests at the broker: 1 contract after the swap, or before 09:45. Then a lost connection can lose more, up to the premium paid. Say so on the trade card.
 
 ## Sanity checks before sending
 
 - Notional is at or below `cap`. State the cap and which setting produced it.
 - `loss_at_stop` is at or below `ceiling_pct` of notional. State both.
 - Opening this position does not exceed `DEEPTRADE_MAX_POSITIONS`.
-- Today's remaining loss budget is start equity × `DAILY_LOSS_PCT` minus today's realized loss. If `loss_at_stop` is over it, reduce `units` until it fits, or skip.
+- Find today's remaining loss budget: start equity × `DAILY_LOSS_PCT`, minus today's realized loss, minus `loss_at_stop` of each open position (every agent's, in team mode). If this trade's `loss_at_stop` is over it, reduce `units` until it fits, or skip.
 - Skip when the stop is inside the spread, or under 0.1% of entry for shares. Reason: noise hits such a stop at once.
 
 ## Worked example

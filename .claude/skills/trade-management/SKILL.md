@@ -64,8 +64,8 @@ If a check ran more than 1 minute late, rebuild the bars you missed before step 
 | 6 | bank order | Always | The bank order fills. Then the position is at stage 1. |
 | 7 | momentum bank | Stage 0 | The bid is at least `entry + 0.5 × R`, and the counter-trend condition (below) is true. |
 | 8 | counter-trend exit | Stage 1 and later | The counter-trend condition is true. |
-| 9 | breakeven stop | Stage 1 | The bid falls to entry. |
-| 10 | giveback | Stage 2 and later | The bid falls below `peak − g × (peak − entry)`. `g` is 0.4, or 0.25 in stage 3. |
+| 9 | breakeven stop | Stage 1, and stage 0 after the 1-contract swap | The bid falls to entry. |
+| 10 | giveback | Stage 2, and stage 3 (which can start from stage 1) | The bid falls below `peak − g × (peak − entry)`. `g` is 0.4, or 0.25 in stage 3. |
 | 11 | time stop | Stage 0, options | After 13:00, the bid made no new peak for 30 minutes. Reason: time decay is about 15% of an at-the-money same-day option's value per hour at midday, more after 14:30. |
 
 A strategy can make the time stop and bank price earlier late in the day (index-trend-scalp, Late session). Use the strategy's values when it does.
@@ -101,10 +101,10 @@ Stages only move forward. A stop only moves toward the price.
 
 | Stage | Trigger | Exits that start |
 | --- | --- | --- |
-| 0. Open | The fill | Momentum bank, time stop |
+| 0. Open | The fill | Momentum bank, time stop. Breakeven stop after the 1-contract swap |
 | 1. Banked | The bid reaches the bank price once, or the bank order fills | Counter-trend exit, breakeven stop |
 | 2. Running | The bid reaches `entry + 1.5 × R` | Giveback, 60% of the best open gain kept |
-| 3. Late | Under 60 minutes to the contract's sellout (shares: to the effective flat time), in stage 2 or later | Giveback, 75% of the best open gain kept |
+| 3. Late | Under 60 minutes to the contract's sellout (shares: to the effective flat time), in stage 1 or later | Giveback, 75% of the best open gain kept |
 
 With 2 or more contracts, when the ladder raises the stop, replace the resting `stop_market`: cancel, confirm the cancel, place the new one.
 

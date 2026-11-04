@@ -113,7 +113,7 @@ function checkSettings(dir, env, plan) {
   // were normal; as a percent of the trade they put the stop inside the noise.
   const risk = L.num(plan.DEEPTRADE_RISK_PER_TRADE_PCT.value);
   if (risk !== null && risk > 100) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} is over 100. It is the most one trade may lose, in percent of what the trade cost.`);
-  else if (risk !== null && risk > 0 && risk < 15) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} now means the most one trade may lose in percent of the trade's own cost, not of equity. ${risk}% of a same-day option is inside its normal noise, so stops would be hit almost at once. If this was set under the old equity meaning, ask the user to change it (default 25).`);
+  else if (risk !== null && risk > 0 && risk < 15 && (() => { const c = L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((x) => x.toLowerCase()); return !c.length || c.includes("option"); })()) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} now means the most one trade may lose in percent of the trade's own cost, not of equity. ${risk}% of a same-day option is inside its normal noise, so stops would be hit almost at once. If this was set under the old equity meaning, ask the user to change it (default 25).`);
   // One full loss (the per-order cap times the ceiling) must fit in the daily
   // loss limit, or position-sizing shrinks every trade to nothing.
   const daily = L.num(plan.DEEPTRADE_DAILY_LOSS_PCT.value);
@@ -121,7 +121,7 @@ function checkSettings(dir, env, plan) {
     const st = L.readState(L.path.join(dir, "journal", L.ACCOUNT_STATE_FILE));
     const usd = L.num(env.DEEPTRADE_MAX_ORDER_USD);
     const pctSet = L.num(env.DEEPTRADE_MAX_ORDER_PCT);
-    const capPct = usd !== null && st.equity ? Math.min(usd / st.equity * 100, pctSet !== null ? pctSet : usd / st.equity * 100) : pctSet !== null ? pctSet : usd === null ? 10 : null;
+    const capPct = usd !== null && st.equity ? Math.min(usd / st.equity * 100, pctSet !== null ? pctSet : usd / st.equity * 100) : pctSet !== null ? pctSet : usd === null ? L.DEFAULT_MAX_ORDER_PCT : null;
     if (capPct !== null) {
       const full = (capPct * risk) / 100;
       if (daily < full) out.push(`DEEPTRADE_DAILY_LOSS_PCT=${daily} is less than one full loss: a trade at the per-order cap (about ${capPct.toFixed(1)}% of equity) can lose ${risk}% of itself, ${full.toFixed(1)}% of equity. Position-sizing would shrink every trade to fit, so few or none would be placed. Raise the daily limit or lower the cap.`);
