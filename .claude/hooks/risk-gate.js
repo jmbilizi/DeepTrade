@@ -6,8 +6,9 @@
 // permission prompt still applies. Orders that reduce exposure (sells and
 // closes in a long-only setup) bypass the caps so the agent can always get flat.
 //
-// Fails closed on breached limits. On its own bugs it warns the model and
-// defers to the permission prompt rather than silently approving.
+// Fails closed on breached limits. Option orders can be allowed without a
+// prompt, so if the gate itself crashes it refuses entries and lets exits and
+// reads through with a warning.
 
 "use strict";
 const L = require("./lib");
@@ -15,6 +16,7 @@ const L = require("./lib");
 function main() {
   const input = L.readStdinJson();
   if (!input) return;
+  lastInput = input;
 
   const toolName = String(input.tool_name || "");
   const toolInput = input.tool_input && typeof input.tool_input === "object" ? input.tool_input : {};
@@ -44,7 +46,7 @@ function main() {
   if (haltAll) return deny("DEEPTRADE_HALT_ALL is true in .env. Every order tool is blocked, including exits. Only cancels work. Ask the user to change it.");
 
   if (reducing) {
-    notes.push(`Risk gate treated this as a position-reducing order${symbol ? ` on ${symbol}` : ""} and did not apply the entry caps. It is still subject to the user's permission prompt.`);
+    notes.push(`Risk gate treated this as a position-reducing order${symbol ? ` on ${symbol}` : ""} and did not apply the entry caps.`);
     return L.emit(ctx(notes));
   }
 
@@ -71,14 +73,22 @@ function main() {
     return deny(`The user changed .env since this session was briefed: ${changed.join("; ")}. These values now apply. Tell the user in one line, re-check this trade against the new values (size, strategy, symbols, times), then submit again if it still fits.`);
   }
 
+  // Market calendar: no entries on a market holiday; on an early-close day the
+  // entry cutoff moves earlier by as much as the close does.
+  const day = now.ok ? L.marketDay(now.date, now.weekday) : { status: "unchecked", shiftMin: 0 };
+  if (day.status === "holiday") return deny(`${now.date} is a US market holiday (${day.name}). New entries are blocked.`);
+  if (day.status === "early" && now.minutes >= day.closeMin) return deny(`The market closed early today at ${L.fmtHHMM(day.closeMin)}. New entries are blocked.`);
+
   // Time window.
   const notBefore = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_BEFORE);
-  const notAfter = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_AFTER);
+  const notAfterSet = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_AFTER);
+  const notAfter = notAfterSet !== null && day.shiftMin ? notAfterSet - day.shiftMin : notAfterSet;
   if (now.ok && notBefore !== null && now.minutes < notBefore) {
     return deny(`It is ${now.text} ${tz}, before DEEPTRADE_NO_NEW_ENTRIES_BEFORE=${env.DEEPTRADE_NO_NEW_ENTRIES_BEFORE}. New entries are blocked.`);
   }
   if (now.ok && notAfter !== null && now.minutes >= notAfter) {
-    return deny(`It is ${now.text} ${tz}, at or after DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER}. New entries are blocked. Exits still work.`);
+    const why = day.shiftMin ? `${L.fmtHHMM(notAfter)}, today's entry cutoff (DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER} moved ${day.shiftMin} minutes earlier for the ${L.fmtHHMM(day.closeMin)} early close)` : `DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER}`;
+    return deny(`It is ${now.text} ${tz}, at or after ${why}. New entries are blocked. Exits still work.`);
   }
 
   // Asset class.
@@ -121,7 +131,9 @@ function main() {
       return deny(`Estimated order value $${est.value.toFixed(2)} (${est.how}) exceeds the per-order cap of $${cap.value.toFixed(2)} (${cap.how}). Reduce size or ask the user to change the cap in .env.`);
     }
     if (est.value === null) {
-      if (L.truthy(env.DEEPTRADE_REQUIRE_KNOWN_VALUE)) {
+      // Option orders can be allowed without a prompt, so an option entry the
+      // gate cannot value is refused whatever DEEPTRADE_REQUIRE_KNOWN_VALUE says.
+      if (L.truthy(env.DEEPTRADE_REQUIRE_KNOWN_VALUE) || cls === "option") {
         return deny(`Risk gate could not estimate this order's value (${est.how}) and DEEPTRADE_REQUIRE_KNOWN_VALUE is true. Use a limit order or a dollar amount so the cap can be checked.`);
       }
       notes.push(`Risk gate could not estimate order value (${est.how}), so the $${cap.value.toFixed(2)} cap was not checked. Confirm the size is within the cap before approving.`);
@@ -130,7 +142,42 @@ function main() {
     }
   }
 
+  // Team exposure under the account-wide order lock. The lock comes first so
+  // no other entry can pass between the check and this order being recorded.
+  if (L.truthy(env.DEEPTRADE_EXPOSURE_GUARD) && cls === "option") {
+    const jdir = L.path.join(dir, "journal");
+    const owner = L.lockOwner(input);
+    const lock = L.takeOrderLock(jdir, owner);
+    if (lock.reason) return deny(`Order lock: ${lock.reason}. Wait a few seconds, read positions and open orders again (they show that order), re-check the plan, then retry.`);
+    const reason = exposureCheck(jdir, env, toolInput, lock.staleTs);
+    if (reason) {
+      L.releaseOrderLock(jdir, owner);
+      return deny(reason);
+    }
+    notes.push("Exposure guard passed. The order lock is held until this order is recorded.");
+  }
+
   L.emit(ctx(notes));
+}
+
+// DEEPTRADE_EXPOSURE_GUARD: DEEPTRADE_MAX_POSITIONS and one open or pending
+// long position per direction (call or put) across every agent on the account.
+function exposureCheck(jdir, env, toolInput, notBefore) {
+  const legs = L.optionLegs(toolInput);
+  if (String(toolInput.time_in_force || "gfd").toLowerCase() !== "gfd") return "DEEPTRADE_EXPOSURE_GUARD is on and this entry is not a day order. The guard reads only today's orders, so entries must use time_in_force gfd. Entry refused.";
+  if (legs.length !== 1) return "DEEPTRADE_EXPOSURE_GUARD is on and this entry has more than one leg. The guard checks single-leg entries only, which is all the shipped strategies trade. Entry refused.";
+  const ex = L.optionExposure(jdir, toolInput.account_number, notBefore);
+  if (ex.error) return `DEEPTRADE_EXPOSURE_GUARD is on and the gate cannot see current option exposure: ${ex.error}. Call get_option_positions (account_number and nonzero: true) and get_option_orders (account_number and created_at_gte = today's date) for this account, in one message, then retry.`;
+  const unknown = ex.exposures.filter((e) => !e.direction).map((e) => e.option_id);
+  if (unknown.length) return `DEEPTRADE_EXPOSURE_GUARD is on and the gate does not know whether open contract(s) ${unknown.join(", ")} are calls or puts. Look them up with get_option_instruments, then retry.`;
+  const maxPos = L.num(L.planSettings(env).DEEPTRADE_MAX_POSITIONS.value);
+  const open = ex.exposures.length;
+  if (maxPos !== null && open + 1 > maxPos) return `DEEPTRADE_MAX_POSITIONS=${maxPos} and the account already has ${open} open or pending option position(s) across all agents. Entry refused. Exits still work.`;
+  const dir1 = ex.types[String(legs[0].option_id || "")];
+  if (!dir1) return "DEEPTRADE_EXPOSURE_GUARD is on and the gate does not know whether this contract is a call or a put. Look it up with get_option_instruments, then retry.";
+  const same = ex.exposures.filter((e) => e.direction === dir1);
+  if (same.length) return `DEEPTRADE_EXPOSURE_GUARD: the account already has an open or pending ${dir1} position (${same.map((e) => e.symbol || e.option_id).join(", ")}), held by this or another agent. One position per direction. Entry refused; a ${dir1 === "call" ? "put" : "call"} entry or an exit is still possible.`;
+  return null;
 }
 
 function effectiveCap(env, stateFile, ordersFile) {
@@ -156,13 +203,25 @@ function deny(reason) {
   });
 }
 
+// The order tools can be allowed without a prompt, so a crash must not let an
+// unchecked entry through: refuse anything that is not clearly an exit.
+let lastInput = null;
 try {
   main();
 } catch (err) {
+  let opening = true;
+  try {
+    const name = String((lastInput && lastInput.tool_name) || "");
+    const ti = lastInput && lastInput.tool_input && typeof lastInput.tool_input === "object" ? lastInput.tool_input : {};
+    const kind = L.classifyTool(name);
+    if (kind === "read" || kind === "cancel") opening = false;
+    else if (kind === "order" && L.isReducing(name, ti, true)) opening = false;
+  } catch {
+    /* classify failed: stay closed */
+  }
   L.emit({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      additionalContext: `DeepTrade risk gate crashed and did not check limits: ${err && err.message}. Treat this order with extra care and tell the user.`,
-    },
+    hookSpecificOutput: opening
+      ? { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `DeepTrade risk gate crashed and could not check this order's limits: ${err && err.message}. Entry refused. Exits and cancels still work. Tell the user.` }
+      : { hookEventName: "PreToolUse", additionalContext: `DeepTrade risk gate crashed: ${err && err.message}. This looked like an exit or a read and was not blocked. Tell the user.` },
   });
 }

@@ -1,23 +1,22 @@
 ---
 name: position-sizing
-description: Fixed-fractional risk sizing. Turns account equity, risk percent, entry, and stop into a share, fractional share, or contract count that also respects the .env per-order cap. Load whenever a trading agent is about to size an order.
+description: Position sizing from the per-order cap, with a loss ceiling measured on the trade itself. Turns the cap, cash, entry, and the strategy's stop into a share, fractional share, or contract count, and sets the stop at the tighter of the strategy's stop and the loss ceiling. Load whenever a trading agent is about to size an order.
 user-invocable: false
 ---
 
 # Position sizing
 
-Risk is decided first, size falls out of it. Size never comes from conviction.
+The per-order cap decides how big a position is. `DEEPTRADE_RISK_PER_TRADE_PCT` decides the most that position may lose, as a percent of **what the trade cost**, not of the account. Size never comes from conviction.
+
+Example of the difference: a 100 trade in a 2,000 account with `RISK_PER_TRADE_PCT=25` can lose at most 25, never the whole 100. Two settings protect the account. The per-order cap limits how big any trade is. The daily loss limit, measured on equity, stops the day.
 
 ## Inputs
 
-- `equity`: agentic account equity from the broker, fetched this session.
-- `risk_pct`: `DEEPTRADE_RISK_PER_TRADE_PCT` from the session context.
+- `equity`, `buying_power`, `cash`: from `get_portfolio` for the agentic account, this session.
+- `ceiling_pct`: `DEEPTRADE_RISK_PER_TRADE_PCT` from the session context. The most a trade may lose, in percent of its cost.
 - `entry`: planned entry price.
-- `stop`: planned stop price, from the strategy.
-- `max_order_usd`: `DEEPTRADE_MAX_ORDER_USD` from `.env`, as reported at session start. Empty unless the user set it.
-- `max_order_pct`: `DEEPTRADE_MAX_ORDER_PCT` from `.env`. May be unset.
-- `buying_power`: buying power in the agentic account, from the broker this session.
-- `cash`: available cash in the agentic account.
+- `strategy_stop`: the stop the strategy sets, in the instrument's own price (for options, the strategy's premium stop).
+- `max_order_usd`, `max_order_pct`: the per-order cap settings, as reported at session start.
 
 ## Effective per-order cap
 
@@ -28,50 +27,53 @@ only usd set    -> cap = max_order_usd if buying_power >= max_order_usd, else eq
 otherwise       -> cap = equity * pct / 100
 ```
 
-The session context states which rule is active. The risk gate applies the same rule to the equity and buying power a hook records from your latest `get_portfolio` call, which must be under 2 minutes old and newer than your last order. Call it right before sizing.
+The session context states which rule is active. The risk gate applies the same rule to your latest `get_portfolio` read. That read must be under 2 minutes old and newer than the last order. Call it right before sizing.
 
-## Shares
-
-```text
-risk_dollars   = equity * risk_pct / 100
-risk_per_share = abs(entry - stop)
-shares         = risk_dollars / risk_per_share
-notional       = shares * entry
-```
-
-Then clamp, in order:
-
-1. If `notional > cap`, set `shares = cap / entry` and note that the cap, not risk, set the size.
-2. If `notional > cash`, set `shares = cash / entry`.
-3. If `DEEPTRADE_FRACTIONAL_SHARES` is false, round down to a whole number. If that gives zero, skip the trade.
-4. If `risk_per_share` is less than 0.1% of entry, the stop is too tight to be meaningful. Skip or ask the strategy for a wider structural stop. Never size up into a tiny stop.
-
-Round fractional shares to 4 decimal places or whatever the broker accepts. Robinhood accepts fractional shares only on market orders in regular hours. For a fractional size, send a market order with `dollar_amount` = shares x price, so the risk gate can check its value. For a limit order, round down to whole shares; if that gives zero, skip the trade.
-
-## Options contracts
-
-Only if `option` is in `DEEPTRADE_ALLOWED_ASSET_CLASSES` and the account has options approval.
+## The stop: the tighter of two
 
 ```text
-risk_dollars  = equity * risk_pct / 100
-risk_per_ctr  = (premium_paid - stop_premium) * 100    for debit positions
-contracts     = floor(risk_dollars / risk_per_ctr)
-notional      = contracts * premium_paid * 100
+long:   ceiling_stop = entry * (1 - ceiling_pct / 100)    stop = max(strategy_stop, ceiling_stop)
+short:  ceiling_stop = entry * (1 + ceiling_pct / 100)    stop = min(strategy_stop, ceiling_stop)
 ```
 
-If a premium stop is not defined, treat the full premium as the risk. Clamp to `cap` and cash as above. If `contracts` is zero, skip.
+The stop is the one closer to entry.
 
-## Crypto
+The loss ceiling is the most you accept losing while the setup still looks valid. It is a limit, not a target: when the setup breaks (trade-management's reversal exit), exit at once, well before the loss ceiling. Exits normally come from the strategy and the trade-management ladder long before it. When the loss ceiling is tighter than the strategy's stop, say so on the trade card: the strategy's stop did not fit the loss ceiling. Never move the stop beyond the loss ceiling to give a trade room.
 
-Same as shares with fractional units allowed. Use the same `risk_pct`. Spreads and fees are larger, so add them to `risk_per_share` before dividing.
+For shares, a strategy's structural stop is almost always far tighter than the loss ceiling, so the strategy's stop decides.
+
+## Size
+
+```text
+unit_cost = entry                      shares
+unit_cost = entry * 100                options (one contract)
+units     = cap / unit_cost            round down to whole contracts, or to whole shares unless fractional
+units     = min(units, cash / unit_cost)
+```
+
+- If `units` is zero, no contract or share fits the cap: skip, and journal "does not fit the cap".
+- `DEEPTRADE_FRACTIONAL_SHARES` false: round shares down to whole. Robinhood accepts fractional shares only on market orders in regular hours, sent with `dollar_amount` = shares × price. For a limit order, round down to whole shares.
+- A strategy may ask for less (for example, index-pair-read's half-size tier). Never more than the cap allows.
+
+## What it can lose
+
+```text
+loss_at_stop = units * abs(entry - stop)              shares, long or short
+loss_at_stop = units * abs(entry - stop) * 100        options
+```
+
+`loss_at_stop` is at most `ceiling_pct` of the trade's cost. State it on the trade card in dollars and as a percent of equity. It is the planned maximum. Sometimes no stop rests at the broker: 1 contract after the swap, or before 09:45. Then a lost connection can lose more, up to the premium paid. Say so on the trade card.
 
 ## Sanity checks before sending
 
-- Dollar risk at the stop is at or below `risk_dollars`. State it.
 - Notional is at or below `cap`. State the cap and which setting produced it.
+- `loss_at_stop` is at or below `ceiling_pct` of notional. State both.
 - Opening this position does not exceed `DEEPTRADE_MAX_POSITIONS`.
-- Total open risk across positions does not exceed 2x the single-trade risk.
+- Find today's remaining loss budget: start equity × `DAILY_LOSS_PCT`, minus today's realized loss, minus `loss_at_stop` of each open position (every agent's, in team mode). If this trade's `loss_at_stop` is over it, reduce `units` until it fits, or skip.
+- Skip when the stop is inside the spread, or under 0.1% of entry for shares. Reason: noise hits such a stop at once.
 
 ## Worked example
 
-Equity 4,000, buying power 4,000. Risk 0.5% = 20 dollars. Entry 52.40, stop 51.90, risk per share 0.50. Shares = 40. Notional 2,096. Only a dollar cap of 500 is set and buying power covers it, so cap = 500 and shares = 500 / 52.40 = 9.54. Actual risk at stop = 9.54 * 0.50 = 4.77 dollars. With a 10% cap also set, the lower cap, 400, would win. The cap, not the risk budget, is the binding limit. Report both numbers to the user so they can decide whether to change the caps.
+Illustrative only: made-up numbers.
+
+Equity 1,000, buying power 1,000. Only `MAX_ORDER_USD=200` is set and buying power covers it, so cap = 200. `RISK_PER_TRADE_PCT=25`. A same-day call asks 0.99, and the strategy's premium stop is 0.50. Contracts = floor(200 / 99) = 2, notional 198. Ceiling stop = 0.99 × 0.75 = 0.7425, rounded toward the entry: 0.75. Stop = max(0.50, 0.75) = 0.75, so the loss ceiling decides. Loss at stop = 2 × 0.24 × 100 = 48, which is 24% of the trade and 4.8% of equity. With `DAILY_LOSS_PCT=20` (200), four full losses fit in one day.

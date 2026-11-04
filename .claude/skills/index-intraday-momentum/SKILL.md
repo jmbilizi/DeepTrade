@@ -28,7 +28,7 @@ Ignore bars marked `interpolated`. If any of this is missing or stale, do not tr
 
 ## The noise area
 
-Compute once per check time `t`, where `t` is a half-hour mark (10:00, 10:30, ... 14:30 America/New_York).
+Compute once per check time `t`, where `t` is a half-hour mark (10:00, 10:30, ... through the entry cutoff, America/New_York).
 
 ```text
 for each of the last 14 sessions d:
@@ -39,25 +39,26 @@ upper(t)  = max(open_today, prev_close) * (1 + sigma(t))
 lower(t)  = min(open_today, prev_close) * (1 - sigma(t))
 ```
 
-The `max` and `min` with the prior close widen the band on the gap side, as in the paper, so a gap alone is not read as a break.
+The `max` and `min` with the prior close widen the band on the gap side, as in the paper. Reason: a gap alone is not a break.
 
 ## Parameters
 
 | Parameter | Default | Notes |
 | --- | --- | --- |
-| Check times | :00 and :30, 10:00 to 14:30 | Act only on these. Between them, manage only |
+| Check times | :00 and :30, from 10:00 to the entry cutoff | Act only on these. Between them, manage only |
 | Lookback | 14 sessions | |
-| Entry window | 10:00 to 14:30 | Also inside the gate's `NO_NEW_ENTRIES_BEFORE`/`AFTER` |
+| Entry window | 10:00 to the entry cutoff: the earlier of `NO_NEW_ENTRIES_AFTER` and 20 minutes before the contract's sellout | No other clock cutoff |
 | Max entries per symbol per day | 2 | Stops churn on two-way days |
 | Max open positions from this strategy | 1 | Index ETFs move together; one exposure at a time |
-| Target (underlying) | Boundary ± 2 × sigma(t) × open | Not from the paper, which has no target; required by CLAUDE.md |
+| Target (underlying) | Boundary ± 1 × sigma(t) × open | Not from the paper, which has no target; required by CLAUDE.md. 2 × sigma proved out of reach on 2026-11-03 (needed more than the day's whole range) |
+| Decision price | Close of the latest completed 5-minute bar at the check | Not the last trade. On 2026-11-03 the two disagreed at 14:00 by 0.01 |
 
 ## Entry rules
 
 **Long** (shares or calls), at a check time `t`:
 
-1. Last price is above `upper(t)`.
-2. Last price is above session VWAP.
+1. The decision price is above `upper(t)`.
+2. The decision price is above session VWAP.
 3. No position in this strategy is open, and the per-symbol entry count is under the limit.
 4. No no-trade condition is active.
 
@@ -70,8 +71,9 @@ Enter with a limit order (see Instruments). If it does not fill before the next 
 Measured on the underlying, whatever the instrument.
 
 - **Initial stop (long):** `max(upper(t), VWAP)` at entry. **Bearish:** `min(lower(t), VWAP)`.
-- **Trailing:** at each later check time, recompute the boundary and VWAP. The stop moves to `max(upper, VWAP)` for longs, `min(lower, VWAP)` for bearish positions, **only if that is in the position's favor**. Never widen. This is the only stop adjustment this strategy permits.
-- **Target:** long `upper(t_entry) + 2 × sigma(t_entry) × open_today`; bearish mirrors it.
+- **Trailing:** at each later check time, recompute the boundary and VWAP. The stop moves to `max(upper, VWAP)` for longs, `min(lower, VWAP)` for bearish positions, **only if that is in the position's favor**. Never widen.
+- **Options: profit protection.** For option positions, also apply the trade-management skill (bank order, ladder, counter-trend exit, time stops), checked every `DEEPTRADE_MANAGE_EVERY_MIN`. The paper did not test options, and on 2026-11-03 the half-hour trail alone turned a +66% premium peak into +9%. For shares, the paper's trail is the only stop adjustment.
+- **Target:** long `upper(t_entry) + 1 × sigma(t_entry) × open_today`; bearish mirrors it.
 - **Reward-to-risk:** if the target distance divided by the stop distance at the planned entry is below 1.2, skip.
 - **Exit** at the first of: the stop crossed on a check, the target hit at any time, the option premium stop, the time exit below, or a no-trade condition arriving.
 - The paper checks stops only at the half-hour marks. Between checks, still exit at once if price crosses the stop by more than `0.5 × sigma(t) × open`. That guards against fast moves; it is not a second strategy.
@@ -91,31 +93,31 @@ Supports `equity` and `option`. Use the first class in `DEEPTRADE_ALLOWED_ASSET_
 | Liquidity | Open interest ≥ 1,000 and today's volume ≥ 1,000 |
 | Spread | Ask minus bid ≤ 5% of the mid |
 | Entry | Limit at the mid, never above the ask |
-| Premium stop | 50% of premium paid, hard backstop |
+| Premium stop | The loss ceiling from position-sizing: `premium × (1 − DEEPTRADE_RISK_PER_TRADE_PCT / 100)`, a hard backstop. The underlying stop usually exits first |
 | Size | Usually 1 contract. More only if position-sizing allows it and the cost still fits the cap |
-| Time exit | Close by `min(DEEPTRADE_FLAT_BY, contract sellout_datetime − 10 minutes)` |
+| Time exit | Close by the effective flat time |
 
 The broker force-closes same-day contracts at the contract's `sellout_datetime` from `get_option_instruments`, which can be earlier than `DEEPTRADE_FLAT_BY`. Always read it at entry and record it on the trade card.
 
-Size with the position-sizing skill, using the premium stop as the stop.
+Size with position-sizing. The per-order cap sets the contract count. The premium stop is the tighter of this table's stop and the loss ceiling.
 
 ### Choosing the strike
 
 The signal is the trend; the contract only expresses it. Pick the strike closest to the money where one contract fits the budget:
 
-1. Start at the strike nearest the last price: the first strike at or above it for calls, at or below it for puts.
-2. One contract costs the ask × 100. If that is at or under the per-order cap and the cash available, and the contract passes the liquidity and spread rules, take it.
+1. Start at the strike nearest the last price. For calls, that is the first strike at or above it; for puts, at or below it.
+2. One contract costs the ask × 100. Take the contract if it fits the per-order cap and the cash, and passes the liquidity and spread rules.
 3. Otherwise step one strike further out of the money, in the trade's direction, and repeat.
-4. Stop stepping when delta falls below 0.20. A contract that far out needs a large move just to break even before the close, so the trend can be right and the trade still lose. If no strike passes by then, skip the signal and journal "no affordable contract".
+4. Stop stepping when delta falls below 0.20. A contract that far out needs a large move to break even before the close. The trend can be right and the trade can still lose. If no strike passes by then, skip the signal and journal "no affordable contract".
 
 Never step into the money to find liquidity; in-the-money contracts cost more, not less. Record on the trade card the strikes you passed over and why.
 
 ## No-trade conditions
 
-- Before 10:00 and after 14:30 for entries.
+- Before 10:00 and after the entry cutoff for entries.
 - Within 30 minutes before, and 10 minutes after, a scheduled high-impact release (FOMC decision, CPI, jobs report). On an FOMC decision day, no option entries after 13:30.
 - `sigma(t)` cannot be computed from 14 clean sessions (missing bars, a holiday-shortened day in the window is fine, missing data is not).
-- The day is a half-day session.
+- The day is an early-close day. The noise band is built from full sessions, so its half-hour sigmas do not fit a session that ends at 13:00. Other strategies may still trade it.
 
 ## What this strategy is bad at
 
@@ -133,4 +135,4 @@ Before the order: open, prior close, sigma(t), upper and lower, VWAP, last price
 
 Illustrative only: made-up symbol XYZ, made-up numbers.
 
-Open 500.00, prior close 499.00. At 10:30, sigma = 0.0030. Upper = 500.00 × 1.003 = 501.50. Lower = 499.00 × 0.997 = 497.50. Last 501.80, VWAP 500.90. Long signal. Stop = max(501.50, 500.90) = 501.50, risk 0.30. Target = 501.50 + 2 × 0.0030 × 500 = 504.50, reward 2.70. R:R 9.0, passes. Per-order cap 200. The 502 call asks 1.60, so one contract costs 160 and fits. If it had asked 2.40, the walk would try 503, then 504, and so on, until one fit or delta fell below 0.20. Say 502 at mid 1.60, delta 0.45, spread 0.02, OI 8,000, volume 20,000: buy 1 at a 1.60 limit. Premium stop 0.80, so 80 at risk.
+Open 500.00, prior close 499.00. At 10:30, sigma = 0.0030. Upper = 500.00 × 1.003 = 501.50. Lower = 499.00 × 0.997 = 497.50. Last 501.80, VWAP 500.90. Long signal. Stop = max(501.50, 500.90) = 501.50, risk 0.30. Target = 501.50 + 1 × 0.0030 × 500 = 503.00, reward 1.20. R:R 4.0, passes. Per-order cap 200. The 502 call asks 1.60, so one contract costs 160 and fits. If it had asked 2.40, the walk would try 503, then 504, and so on, until one fit or delta fell below 0.20. Say 502 at mid 1.60, delta 0.45, spread 0.02, OI 8,000, volume 20,000: buy 1 at a 1.60 limit (2 would cost 320, over the cap). With a 25% loss ceiling the premium stop is 1.20, so 40 at risk.

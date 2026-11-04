@@ -27,6 +27,10 @@ const PROTECTED = [
   /^journal\/tools-seen\.txt$/,
   /^journal\/option-ids\.json$/,
   /^journal\/account-state\.json$/,
+  /^journal\/option-types\.json$/,
+  /^journal\/option-positions\.json$/,
+  /^journal\/option-open-orders\.json$/,
+  /^journal\/order-lock\.json$/,
   /^journal\/agentic-accounts\.json$/,
   /^journal\/settings-snapshot\.json$/,
 ];
@@ -41,7 +45,7 @@ function mentionsSecret(cmd) {
   return hits.some((h) => h.toLowerCase() !== ".env.example");
 }
 
-const PATH_HINT = /(\.env\b|\.mcp\.json|claude\.md|\.claude[\\/]+(settings|hooks|agents)|journal[\\/]+(orders\.jsonl|tools-seen\.txt|option-ids\.json|account-state\.json|agentic-accounts\.json|settings-snapshot\.json))/i;
+const PATH_HINT = /(\.env\b|\.mcp\.json|claude\.md|\.claude[\\/]+(settings|hooks|agents)|journal[\\/]+(orders\.jsonl|tools-seen\.txt|option-ids\.json|option-types\.json|option-positions\.json|option-open-orders\.json|order-lock\.json|account-state\.json|agentic-accounts\.json|settings-snapshot\.json))/i;
 
 // Programs that only read. A command segment must start with one of these.
 const READ_ONLY = new Set(["cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "diff", "type", "get-content", "gc", "select-string", "ls", "dir", "stat", "file", "find", "sleep", "echo", "printf", "pwd", "date", "test", "true"]);

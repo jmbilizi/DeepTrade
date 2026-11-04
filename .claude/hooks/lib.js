@@ -10,6 +10,14 @@ const path = require("path");
 // the last order, because every fill and cancel changes buying power.
 const STATE_MAX_AGE_MIN = 2;
 const ACCOUNT_STATE_FILE = "account-state.json";
+const OPTION_TYPES_FILE = "option-types.json";
+const OPTION_POSITIONS_FILE = "option-positions.json";
+const OPTION_OPEN_ORDERS_FILE = "option-open-orders.json";
+const ORDER_LOCK_FILE = "order-lock.json";
+// An order lock older than this is stale: its order was never recorded, for
+// example because the call failed. Short, so a failed call does not hold up the
+// partner's flip. Team mode refuses manual approval, which could outlast it.
+const ORDER_LOCK_TTL_MS = 15000;
 const AGENTIC_ACCOUNTS_FILE = "agentic-accounts.json";
 const DEFAULT_TZ = "America/New_York";
 
@@ -72,6 +80,7 @@ const GUARDRAIL_KEYS = [
   "DEEPTRADE_ALLOW_SHORTS",
   "DEEPTRADE_GATE_SELLS", // legacy alias of DEEPTRADE_ALLOW_SHORTS
   "DEEPTRADE_TIMEZONE",
+  "DEEPTRADE_EXPOSURE_GUARD",
 ];
 
 // Per-order cap when .env sets neither DEEPTRADE_MAX_ORDER_USD nor DEEPTRADE_MAX_ORDER_PCT.
@@ -122,17 +131,55 @@ function describeOrderCap(env) {
 
 const PLAN_DEFAULTS = {
   DEEPTRADE_STRATEGIES: "opening-range-breakout",
-  DEEPTRADE_RISK_PER_TRADE_PCT: "0.5",
+  DEEPTRADE_RISK_PER_TRADE_PCT: "25",
   DEEPTRADE_MAX_POSITIONS: "2",
-  DEEPTRADE_DAILY_LOSS_PCT: "1.5",
+  DEEPTRADE_DAILY_LOSS_PCT: "10",
   DEEPTRADE_FLAT_BY: "15:50",
   DEEPTRADE_CHECK_EVERY_MIN: "5",
+  DEEPTRADE_MANAGE_EVERY_MIN: "1",
+  DEEPTRADE_TEAM_SIZE: "1",
   DEEPTRADE_FRACTIONAL_SHARES: "true",
   DEEPTRADE_SCAN_MIN_PRICE: "10",
   DEEPTRADE_SCAN_MIN_AVG_VOLUME: "2000000",
 };
 
 const ASSET_CLASSES = ["equity", "option", "crypto"];
+
+// US equity market calendar, from NYSE Group's published holiday and early
+// closings calendar (checked 2026-11-03 at ir.theice.com and nyse.com). Update
+// it when NYSE publishes the next year; past COVERED_THROUGH the hooks say the
+// day is unchecked. Early closes are 13:00 ET for stocks (options 13:15).
+const MARKET_CALENDAR = {
+  coveredThrough: "2027-12-31",
+  holidays: {
+    "2026-01-01": "New Year's Day", "2026-01-19": "Martin Luther King Jr. Day", "2026-02-16": "Washington's Birthday",
+    "2026-04-03": "Good Friday", "2026-05-25": "Memorial Day", "2026-06-19": "Juneteenth", "2026-07-03": "Independence Day (observed)",
+    "2026-09-07": "Labor Day", "2026-11-26": "Thanksgiving Day", "2026-12-25": "Christmas Day",
+    "2027-01-01": "New Year's Day", "2027-01-18": "Martin Luther King Jr. Day", "2027-02-15": "Washington's Birthday",
+    "2027-03-26": "Good Friday", "2027-05-31": "Memorial Day", "2027-06-18": "Juneteenth (observed)", "2027-07-05": "Independence Day (observed)",
+    "2027-09-06": "Labor Day", "2027-11-25": "Thanksgiving Day", "2027-12-24": "Christmas Day (observed)",
+  },
+  earlyCloses: { "2026-11-27": "13:00", "2026-12-24": "13:00", "2027-11-26": "13:00" },
+};
+const REGULAR_CLOSE_MIN = 16 * 60;
+
+// { status: "holiday" | "early" | "regular" | "weekend" | "unchecked", name, closeMin, shiftMin }
+// shiftMin is how many minutes earlier than 16:00 the market closes.
+function marketDay(date, weekday) {
+  if (weekday === "Saturday" || weekday === "Sunday") return { status: "weekend", closeMin: null, shiftMin: 0 };
+  if (MARKET_CALENDAR.holidays[date]) return { status: "holiday", name: MARKET_CALENDAR.holidays[date], closeMin: null, shiftMin: 0 };
+  if (MARKET_CALENDAR.earlyCloses[date]) {
+    const closeMin = parseHHMM(MARKET_CALENDAR.earlyCloses[date]);
+    return { status: "early", closeMin, shiftMin: REGULAR_CLOSE_MIN - closeMin };
+  }
+  if (date > MARKET_CALENDAR.coveredThrough) return { status: "unchecked", closeMin: REGULAR_CLOSE_MIN, shiftMin: 0 };
+  return { status: "regular", closeMin: REGULAR_CLOSE_MIN, shiftMin: 0 };
+}
+
+function fmtHHMM(min) {
+  const m = ((min % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
 
 // Optional data sources. Each is an .mcp.json server started through
 // optional-mcp.js, which offers no tools unless its key is set in .env.
@@ -356,11 +403,7 @@ function readOptionIds(file) {
 }
 
 function saveOptionIds(file, found) {
-  if (!Object.keys(found).length) return;
-  const merged = { ...readOptionIds(file), ...found };
-  const keys = Object.keys(merged);
-  const kept = keys.length > OPTION_IDS_MAX ? Object.fromEntries(keys.slice(-OPTION_IDS_MAX).map((k) => [k, merged[k]])) : merged;
-  fs.writeFileSync(file, JSON.stringify(kept), "utf8");
+  saveIdMap(file, found);
 }
 
 // Symbol of an order: a symbol field, else the underlying of its option legs.
@@ -624,13 +667,330 @@ function redact(v, depth = 0) {
   return v;
 }
 
+// ---------- team exposure (DEEPTRADE_EXPOSURE_GUARD) ----------
+// Several agents can trade one account. With the guard on, an option entry
+// needs two fresh, complete broker reads for the order's account: positions
+// (get_option_positions) and open orders (get_option_orders). From them the
+// gate enforces DEEPTRADE_MAX_POSITIONS and at most one open or pending long
+// position per direction (call, put) across every agent, and an account-wide
+// lock lets one entry through at a time. Anything it cannot read fails closed.
+
+// Broker order states that can still fill. pending_cancelled is a cancel in
+// flight; the order can fill before it lands, so it still counts.
+const OPEN_ORDER_STATES = new Set(["unconfirmed", "queued", "confirmed", "partially_filled", "pending_cancelled"]);
+
+const walkJson = (v, visit) => parseMaybeJson(v, 0, visit);
+
+function collectOptionTypes(response) {
+  const out = {};
+  walkJson(response, (o) => {
+    const id = typeof o.option_id === "string" ? o.option_id : typeof o.id === "string" ? o.id : "";
+    const raw = String(o.option_type || o.type || "").toLowerCase();
+    if (id && (raw === "call" || raw === "put")) out[id] = raw;
+  });
+  return out;
+}
+
+function readJsonFile(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Merge id -> value maps into a hook-written file, newest entries kept.
+function saveIdMap(file, found, max = OPTION_IDS_MAX) {
+  if (!Object.keys(found).length) return;
+  const cur = readJsonFile(file);
+  const base = cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {};
+  for (const k of Object.keys(found)) delete base[k];
+  const merged = { ...base, ...found };
+  const keys = Object.keys(merged);
+  const kept = keys.length > max ? Object.fromEntries(keys.slice(-max).map((k) => [k, merged[k]])) : merged;
+  fs.writeFileSync(file, JSON.stringify(kept), "utf8");
+}
+
+// Accounts are compared by their last 4 characters so no full number is stored.
+const acctKey = (a) => (a === undefined || a === null || a === "" ? "" : "…" + String(a).slice(-4));
+
+function isKnownAgentic(jdir, account) {
+  const known = readJsonFile(path.join(jdir, AGENTIC_ACCOUNTS_FILE));
+  return Array.isArray(known) && known.map(String).includes(String(account || ""));
+}
+
+// The `next` cursor of a paged response, or "".
+function nextCursor(response) {
+  let next = "";
+  walkJson(response, (o) => {
+    if (!next && !Array.isArray(o) && typeof o.next === "string" && o.next.trim()) next = o.next.trim();
+  });
+  return next;
+}
+
+// Rows of the first `positions` array found, or null when there is none
+// (an error or an unexpected shape). bad counts rows the gate cannot identify.
+function positionRows(response) {
+  let rows = null;
+  let bad = 0;
+  walkJson(response, (o) => {
+    if (rows || !Array.isArray(o.positions)) return;
+    rows = [];
+    for (const r of o.positions) {
+      if (!r || typeof r !== "object") continue;
+      const qty = num(r.quantity) || 0;
+      if (typeof r.option_id !== "string" || !r.option_id) {
+        if (qty !== 0) bad++;
+        continue;
+      }
+      rows.push({ option_id: r.option_id, symbol: typeof r.chain_symbol === "string" ? r.chain_symbol.toUpperCase() : null, side: String(r.type || "").toLowerCase(), quantity: qty });
+    }
+  });
+  return { rows, bad };
+}
+
+// Open opening orders from a get_option_orders response, or null.
+function openEntryOrders(response) {
+  let list = null;
+  let bad = 0;
+  walkJson(response, (o) => {
+    if (list || !Array.isArray(o.orders)) return;
+    list = [];
+    for (const ord of o.orders) {
+      if (!ord || typeof ord !== "object") continue;
+      if (!OPEN_ORDER_STATES.has(String(ord.state || "").toLowerCase())) continue;
+      const legs = Array.isArray(ord.legs) ? ord.legs.filter((l) => l && String(l.position_effect).toLowerCase() === "open") : [];
+      if (!legs.length) continue;
+      if (legs.some((l) => typeof l.option_id !== "string" || !l.option_id)) {
+        bad++;
+        continue;
+      }
+      list.push({
+        order_id: typeof ord.id === "string" ? ord.id : null,
+        symbol: typeof ord.chain_symbol === "string" ? ord.chain_symbol.toUpperCase() : null,
+        legs: legs.map((l) => ({ option_id: l.option_id, direction: ["call", "put"].includes(String(l.option_type).toLowerCase()) ? String(l.option_type).toLowerCase() : null })),
+      });
+    }
+  });
+  return { rows: list, bad };
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// A paged read is complete once every page has been read in a row: page 1
+// (no cursor), then each `next` cursor, within this window.
+const PAGE_CHAIN_MS = 60000;
+
+// Called by the journal hook on every read. Writes option-positions.json and
+// option-open-orders.json for the agentic account the read was for. The read
+// time is when the call started (now minus its duration), so a read that was
+// in flight while another agent's order landed counts as older than that order.
+function recordExposureReads(jdir, toolTailName, toolInput, response, tz, durationMs) {
+  const isPos = /^get_option_positions$/i.test(toolTailName);
+  const isOrd = /^get_option_orders$/i.test(toolTailName);
+  if (!isPos && !isOrd) return;
+  const ti = toolInput && typeof toolInput === "object" ? toolInput : {};
+  if (!isKnownAgentic(jdir, ti.account_number)) return;
+  const file = path.join(jdir, isPos ? OPTION_POSITIONS_FILE : OPTION_OPEN_ORDERS_FILE);
+  const now = Date.now();
+  const started = now - (Number.isFinite(Number(durationMs)) && Number(durationMs) >= 0 ? Number(durationMs) : 5000);
+  const isSet = (k) => ti[k] !== undefined && ti[k] !== null && ti[k] !== "";
+  const allowed = isPos ? ["account_number", "nonzero", "cursor"] : ["account_number", "created_at_gte", "cursor"];
+  const extra = Object.keys(ti).filter((k) => isSet(k) && !allowed.includes(k));
+  const got = isPos ? positionRows(response) : openEntryOrders(response);
+  const next = nextCursor(response);
+  const account = acctKey(ti.account_number);
+  const today = localParts(tz).date;
+  const since = isSet("created_at_gte") ? String(ti.created_at_gte) : "";
+  let why =
+    got.rows === null ? `the response had no ${isPos ? "positions" : "orders"} list (an error or a new format)`
+    : got.bad ? `${got.bad} ${isPos ? "position(s)" : "open entry order(s)"} had no contract id`
+    : extra.length ? `it was filtered by ${extra.join(", ")}`
+    : !isPos && !(ISO_DATE.test(since) && since <= today) ? `created_at_gte must be a date on or before today (${today})`
+    : "";
+  let items = got.rows || [];
+  let updatedAt = started;
+  if (!why && isSet("cursor")) {
+    const prev = readJsonFile(file);
+    const ok = prev && prev.account === account && prev.next_cursor && prev.next_cursor === String(ti.cursor) && now - Date.parse(prev.updated_at || "") < PAGE_CHAIN_MS;
+    if (!ok) why = "a later page was read without the pages before it; start again from the first page";
+    else {
+      items = [...(prev.items || []), ...items];
+      updatedAt = Date.parse(prev.updated_at);
+    }
+  }
+  const pending = !why && next ? next : "";
+  if (!why && next) why = `more pages remain; read the next page with cursor = the response's next value`;
+  fs.writeFileSync(file, JSON.stringify({ updated_at: new Date(updatedAt).toISOString(), account, complete: !why, why, next_cursor: pending, items }), "utf8");
+}
+
+// Open or pending long-option exposure on `account` across all agents.
+// Returns { exposures: [{ option_id, symbol, direction }], types } or { error }.
+// `notBefore` (ms) requires both reads to be newer than that time too.
+function optionExposure(jdir, account, notBefore = null, now = Date.now()) {
+  const last = lastOrderMs(path.join(jdir, "orders.jsonl"));
+  const reads = [
+    ["get_option_positions (only account_number and nonzero: true)", readJsonFile(path.join(jdir, OPTION_POSITIONS_FILE))],
+    ["get_option_orders (only account_number and created_at_gte = today's date)", readJsonFile(path.join(jdir, OPTION_OPEN_ORDERS_FILE))],
+  ];
+  for (const [name, r] of reads) {
+    if (!r) return { error: `no ${name} read is recorded` };
+    const at = Date.parse(r.updated_at || "");
+    if (!Number.isFinite(at)) return { error: `the ${name} read has no time` };
+    if (!r.complete) return { error: `the last ${name} read is not complete: ${r.why}` };
+    if (r.account !== acctKey(account)) return { error: `the last ${name} read was for a different account than this order` };
+    if ((now - at) / 60000 > STATE_MAX_AGE_MIN) return { error: `the last ${name} read is ${Math.round((now - at) / 1000)} s old (limit ${STATE_MAX_AGE_MIN} min)` };
+    if (last !== null && last >= at) return { error: `an order or cancel (by this or another agent) came after the last ${name} read` };
+    if (notBefore !== null && notBefore >= at) return { error: `an earlier entry went through the gate but was never recorded, so the last ${name} read may not show it` };
+  }
+  const [pos, ord] = [{ rows: reads[0][1].items || [] }, { orders: reads[1][1].items || [] }];
+  const types = readJsonFile(path.join(jdir, OPTION_TYPES_FILE)) || {};
+  const exposures = [];
+  const seen = new Set();
+  for (const r of pos.rows) {
+    if (r.side === "short" || !(r.quantity > 0) || seen.has(r.option_id)) continue;
+    seen.add(r.option_id);
+    exposures.push({ option_id: r.option_id, symbol: r.symbol, direction: types[r.option_id] || null });
+  }
+  for (const o of ord.orders) {
+    for (const l of o.legs) {
+      if (!l.option_id || seen.has(l.option_id)) continue;
+      seen.add(l.option_id);
+      exposures.push({ option_id: l.option_id, symbol: o.symbol, direction: l.direction || types[l.option_id] || null, pending: true });
+    }
+  }
+  return { exposures, types };
+}
+
+function orderLockPath(jdir) {
+  return path.join(jdir, ORDER_LOCK_FILE);
+}
+
+// Who holds a lock: the tool call if Claude Code names it, else the agent or
+// session. A subagent can share its parent's session id, so the tool call id
+// is what separates two team members in one session.
+function lockOwner(input) {
+  const i = input || {};
+  return String(i.tool_use_id || i.agent_id || i.session_id || "unknown");
+}
+
+// Take the account-wide entry lock: one opening order in flight at a time,
+// whoever sends it. Returns { staleTs } on success (the time of a stale lock
+// it replaced, or null), else { reason }.
+function takeOrderLock(jdir, owner, now = Date.now()) {
+  const file = orderLockPath(jdir);
+  let staleTs = null;
+  let raw = null;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    /* no lock */
+  }
+  if (raw !== null) {
+    let cur = null;
+    try {
+      cur = JSON.parse(raw);
+    } catch {
+      /* unreadable lock: treat as stale */
+    }
+    let t = cur ? Date.parse(cur.ts || "") : NaN;
+    if (!Number.isFinite(t)) {
+      // Empty or unreadable: judge it by the file's age, never as free.
+      try {
+        t = fs.statSync(file).mtimeMs;
+      } catch {
+        t = now;
+      }
+    }
+    const age = now - t;
+    if (cur && cur.owner === owner) return { staleTs: null };
+    if (Number.isFinite(age) && age < ORDER_LOCK_TTL_MS) return { reason: `another entry went through the gate ${Math.round(age / 1000)} s ago and has not been recorded yet` };
+    // Replace a stale lock atomically: move it aside, and if what was moved is
+    // not the lock we judged stale, put it back and give up.
+    const aside = `${file}.${process.pid}.${now}`;
+    try {
+      fs.renameSync(file, aside);
+    } catch {
+      return { reason: "another entry is replacing a stale order lock at the same moment" };
+    }
+    let moved = null;
+    try {
+      moved = fs.readFileSync(aside, "utf8");
+    } catch {
+      /* vanished */
+    }
+    if (moved !== raw) {
+      try {
+        fs.linkSync(aside, file);
+      } catch {
+        /* someone else holds it now */
+      }
+      try {
+        fs.unlinkSync(aside);
+      } catch {
+        /* gone */
+      }
+      return { reason: "another entry took the order lock at the same moment" };
+    }
+    try {
+      fs.unlinkSync(aside);
+    } catch {
+      /* gone */
+    }
+    staleTs = t;
+  }
+  // Write the lock in full first, then link it into place: link fails if the
+  // lock exists, and the lock never appears empty to another process.
+  const tmp = `${file}.${process.pid}.${now}.new`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ owner, ts: new Date(now).toISOString() }), "utf8");
+    fs.linkSync(tmp, file);
+    return { staleTs };
+  } catch {
+    return { reason: "another entry took the order lock at the same moment" };
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* gone */
+    }
+  }
+}
+
+// Release only the lock this tool call took.
+function releaseOrderLock(jdir, owner) {
+  const file = orderLockPath(jdir);
+  const cur = readJsonFile(file);
+  if (cur && cur.owner === owner) {
+    try {
+      fs.unlinkSync(file);
+    } catch {
+      /* gone already */
+    }
+  }
+}
+
 module.exports = {
+  MARKET_CALENDAR,
+  marketDay,
+  fmtHHMM,
   STATE_MAX_AGE_MIN,
   ACCOUNT_STATE_FILE,
   SETTINGS_SNAPSHOT_FILE,
   settingsSnapshot,
   settingsChanges,
   lastOrderMs,
+  OPTION_TYPES_FILE,
+  OPTION_POSITIONS_FILE,
+  OPTION_OPEN_ORDERS_FILE,
+  ORDER_LOCK_FILE,
+  collectOptionTypes,
+  saveIdMap,
+  recordExposureReads,
+  optionExposure,
+  lockOwner,
+  takeOrderLock,
+  releaseOrderLock,
   recordAccountState,
   collectPortfolio,
   collectAgenticAccounts,

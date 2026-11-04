@@ -3,7 +3,31 @@
     "allow": [
       "Bash(sleep *)",
       "Edit(journal/**)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__robinhood-trading__place_option_order",
+      "mcp__robinhood-trading__cancel_option_order",
+      "mcp__robinhood-trading__review_option_order",
+      "mcp__robinhood-trading__review_equity_order",
+      "mcp__robinhood-trading__get_accounts",
+      "mcp__robinhood-trading__get_portfolio",
+      "mcp__robinhood-trading__get_trade_approval_setting",
+      "mcp__robinhood-trading__get_option_positions",
+      "mcp__robinhood-trading__get_option_orders",
+      "mcp__robinhood-trading__get_option_chains",
+      "mcp__robinhood-trading__get_option_instruments",
+      "mcp__robinhood-trading__get_option_quotes",
+      "mcp__robinhood-trading__get_option_historicals",
+      "mcp__robinhood-trading__get_equity_quotes",
+      "mcp__robinhood-trading__get_equity_historicals",
+      "mcp__robinhood-trading__get_equity_technical_indicators",
+      "mcp__robinhood-trading__get_equity_positions",
+      "mcp__robinhood-trading__get_equity_orders",
+      "mcp__robinhood-trading__get_equity_tradability",
+      "mcp__robinhood-trading__get_earnings_calendar",
+      "mcp__robinhood-trading__get_scanner_filter_specs",
+      "mcp__robinhood-trading__preview_scan",
+      "Bash(date)",
+      "Bash(date *)"
     ]
   },
   "hooks": {

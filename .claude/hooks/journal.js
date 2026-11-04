@@ -40,13 +40,28 @@ function main() {
     }
   }
 
+  // Remember call or put per contract id, from lookups and order responses, for
+  // the exposure guard's one-position-per-direction rule.
+  if ((kind === "read" || kind === "order") && /option/i.test(L.toolTail(toolName))) {
+    try {
+      L.saveIdMap(L.path.join(jdir, L.OPTION_TYPES_FILE), L.collectOptionTypes(input.tool_response));
+    } catch {
+      /* best effort; the gate refuses entries it cannot classify */
+    }
+  }
+
   // Record equity and buying power straight from the broker's response, so the
-  // risk gate never depends on numbers the agent wrote.
+  // risk gate never depends on numbers the agent wrote. Same for option positions.
   if (kind === "read") {
     try {
       L.recordAccountState(L.path.join(jdir, L.ACCOUNT_STATE_FILE), L.toolTail(toolName), input.tool_input, input.tool_response);
     } catch {
       /* best effort; the gate refuses entries without a fresh read */
+    }
+    try {
+      L.recordExposureReads(jdir, L.toolTail(toolName), input.tool_input, input.tool_response, tz, input.duration_ms);
+    } catch {
+      /* best effort; the exposure guard refuses entries without a fresh read */
     }
   }
   if (kind !== "order" && kind !== "cancel") return;
@@ -71,6 +86,8 @@ function main() {
 
   try {
     L.fs.appendFileSync(L.path.join(jdir, "orders.jsonl"), JSON.stringify(record) + "\n", "utf8");
+    // The order is on record, so other agents' gates can see it: free the lock.
+    L.releaseOrderLock(jdir, L.lockOwner(input));
   } catch (err) {
     L.emit({
       hookSpecificOutput: {
