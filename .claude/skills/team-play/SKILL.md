@@ -1,107 +1,117 @@
 ---
 name: team-play
-description: How two trading agents share one account as a team. Joining, the shared team board in journal/, the WATCH, HOLD, and HUNT roles, the reversal handoff where the hunter flips and the holder exits, ownership of positions, team-wide limits, and the team review. Load when DEEPTRADE_TEAM_SIZE is above 1.
+description: How two trading agents share one account as a team. Launch from one main session, the shared team board, the WATCH, HOLD, and HUNT roles, the reversal handoff, ownership of positions, team limits, and the team review. Load when DEEPTRADE_TEAM_SIZE is above 1.
 user-invocable: false
 ---
 
 # Team play
 
-Two agents trade one account. At any moment one may hold a position and protect it; the other hunts for the reversal. When the hunter catches a confirmed reversal, it takes the other side and the holder gets out, and the roles swap. The team wins or loses on the account's total for the day. Each member's own stats are kept for learning, not to compete on.
+Terms are defined in trading-terms. Two agents trade one account. One may hold a position and protect it. The other hunts for the reversal. When the hunter catches a confirmed reversal, it takes the other side, the holder exits, and the roles swap. The team is judged on the account's total for the day. Each member's stats are for learning, not for competition.
 
-A setting written as `TEAM_SIZE` means `DEEPTRADE_TEAM_SIZE`.
+## Safety
 
-## Safety comes from the gate
+The risk gate keeps two members from doubling a position. With `DEEPTRADE_EXPOSURE_GUARD=true`, it allows on the whole account:
 
-With `DEEPTRADE_EXPOSURE_GUARD=true`, the risk gate checks every option entry against the broker's positions and resting orders for the whole account: `MAX_POSITIONS`, at most one open or pending call and one put, and one entry through the gate at a time. Team mode requires the guard and trades options only. If the session context shows `exposure_guard=false` with `TEAM_SIZE` above 1, stop and tell the user. A gate denial that names another agent's position or the order lock means your partner got there first. Do not retry the same entry; read the board.
+- at most `MAX_POSITIONS` option positions,
+- one open or pending call and one put,
+- one entry at a time.
+
+- Team mode needs the guard and trades options only. If the session context shows `exposure_guard=false`, stop and tell the user.
+- A denial that names another agent's position, or the order lock, means your partner got there first. Do not retry that entry. Read the board.
 
 ## The board
 
-`journal/YYYY-MM-DD-team.md`, shared by both members. **Append only**, one line per event. Write with the Edit tool (the project settings allow it for `journal/`): read the file, then replace its last line with that same line plus your new line. If Edit reports the file changed since you read it, your partner just wrote: read it again and retry. Never rewrite or delete other lines. A shell append (`>>`) would prompt for permission, which a background partner cannot answer. Create the file with Write only if it does not exist yet.
+`journal/YYYY-MM-DD-team.md` is shared by both members. It is append-only, one line per event:
 
 ```text
 HH:MM:SS | MEMBER | EVENT | details
 ```
 
+To add a line:
+
+1. Read the file.
+2. With the Edit tool, replace the last line with that same line plus your new line.
+3. If Edit says the file changed since you read it, your partner just wrote. Read it again and retry.
+
+Never change or delete another line. Create the file with Write only if it does not exist. Do not use a shell append (`>>`). Reason: it asks for permission, and a background partner cannot answer.
+
 | Event | When | Details |
 | --- | --- | --- |
-| `JOIN` | Session start | Your member name, start equity from `get_portfolio` |
-| `ARM` | A setup is forming | Symbol, direction, trigger, strategy |
-| `ENTRY` | Right after your entry order is sent | Symbol, contract, direction, size, stop, target, strategy |
-| `FILL` | Fill confirmed | Price, bank order id ending |
-| `FLIP` | Right before you send an entry opposite to your partner's position | Direction, the signal that confirmed the reversal |
-| `EXIT` | Position closed | Price, result in dollars and R, exit reason |
+| `JOIN` | Session start | Your letter, start equity from `get_portfolio` |
+| `ARM` | A setup forms | Symbol, direction, trigger, strategy |
+| `ENTRY` | Right after your entry order is sent | Symbol, contract, direction, size, strategy stop, target, strategy |
+| `FILL` | Fill confirmed | Price, resting order id ending |
+| `FLIP` | Right before an entry opposite to your partner's position | Direction, the signal that confirmed the reversal |
+| `EXIT` | Position closed | Price, result in dollars and R, exit name |
 | `HALT` | Team daily loss limit reached, or the user stopped trading | Reason |
-| `NOTE` | Anything your partner must know now | One line |
+| `NOTE` | Your partner must know something now | One line |
 
-Read the whole board at the start of every check. It is the record of who holds what. Positions and orders at the broker are the record of what exists; when they disagree, trust the broker and post a `NOTE`.
+Read the whole board at the start of each check. The board records who holds what. The broker records what exists. When they disagree, trust the broker and post a `NOTE`.
 
-## Launching: one main session
+## Launch from one main session
 
-The user starts one session. That session is member `A`, the main. After preflight and the plan, A starts the partner itself:
+The user starts one session. It is member `A`. After preflight and the plan, A starts the partner:
 
-1. Append `JOIN` for A to the board.
-2. Start one partner with the Agent tool, `subagent_type: index-0dte-trader` (the same agent type as you), in the background. Its prompt says, in this order: "Team member B. Do not start other agents." Then today's date, the board path, the effective flat time, the symbols, the plan section of your journal note to copy, and that preflight is done and settings are in force, so B skips it except for its own `get_accounts` and `get_portfolio` reads.
-3. B appends its own `JOIN` and starts its loop in `WATCH`.
+1. Add the `JOIN` line for A.
+2. Start one partner with the Agent tool: `subagent_type: index-0dte-trader`, in the background. Its prompt starts "Team member B. Do not start other agents." Then give: today's date, the board path, the effective flat time, the symbols, and the plan section of your journal note. Say that preflight is done, so B makes only its own `get_accounts` and `get_portfolio` reads.
+3. B adds its `JOIN` line and starts in `WATCH`.
 
-Only A starts partners, and only up to `TEAM_SIZE` members in total. A member started with a "Team member" prompt never starts another agent. If B stops or errors, A posts a `NOTE`, keeps trading alone, and tells the user; A may restart B once.
+- Only A starts a partner, up to `TEAM_SIZE` members in total. A member whose prompt says "Team member" never starts an agent.
+- If B stops or fails, A posts a `NOTE`, trades alone, and tells the user. A may restart B once.
+- A user may run members in separate terminals. A session that finds `A` already on today's board joins as the next letter and starts no partner.
 
-The user can still run members in separate terminals instead: a session that finds an `A` already joined on today's board joins as the first unused letter and does not start a partner.
-
-## Joining
-
-Use your letter on every line and in your journal note. Each member keeps its own journal note `journal/YYYY-MM-DD-<letter>.md`, so the two never write the same file.
+Use your letter on every board line. Write your own journal note, `journal/YYYY-MM-DD-<letter>.md`.
 
 ## Roles
 
-Your role follows from the board and the broker, checked every time:
+Find your role from the board and the broker at each check:
 
 | Account state | Your role | What you may open |
 | --- | --- | --- |
-| No position held by the team | `WATCH` | Any strategy signal, either direction |
+| The team holds nothing | `WATCH` | Any strategy signal, either direction |
 | You hold a position | `HOLD` | Nothing. Manage it with trade-management |
-| Your partner holds a position | `HUNT` | Only the opposite direction, only on a reversal signal (below) |
+| Your partner holds a position | `HUNT` | Only the opposite direction, only on an opposite signal |
 
-In `WATCH`, both members read every setup. Whoever's entry passes the gate first takes it; the other is denied by the one-per-direction rule and stands down. Never two positions in the same direction.
+In `WATCH`, both members test every setup. The first entry through the gate takes it. The gate refuses the other, which stands down.
 
-## Hunting the reversal
+## HUNT
 
-While your partner holds, your one job is to catch a confirmed reversal early.
+Catch the confirmed reversal early.
 
-- Read the board and the tape every `MANAGE_EVERY_MIN` minutes, not only at strategy check times.
-- A confirmed reversal is an enabled strategy's entry signal in the opposite direction: for index-trend-scalp, setup B (VWAP reclaim); for index-intraday-momentum, a break of the opposite band. "It looks toppy" is not a reversal.
-- Watch your partner's trade-management triggers too (counter-trend exit, giveback). When they fire, post a `NOTE` so the holder sees it at its next check.
+1. Read the board and the tape every `MANAGE_EVERY_MIN` minutes, not only at strategy checks.
+2. Test for an opposite signal, as trade-management defines it. "It looks toppy" is not a signal.
+3. When your partner's trade-management exits fire (counter-trend exit, giveback), post a `NOTE`.
+4. On an opposite signal: add the `FLIP` line, then enter by the order-execution fast path. You now `HOLD`.
 
-When the reversal confirms: append `FLIP`, then send your entry by the order-execution fast path. You now `HOLD`.
+## HOLD and the flip
 
-## The holder's side of a flip
-
-- On reading a `FLIP` line newer than your entry, exit at once with the trade-management exit procedure. Exit reason: `partner reversal`.
-- Your own ladder exits keep working as normal. If you exit first, append `EXIT`; the team is back in `WATCH`.
-- After a flip and your exit, you `HUNT`: the reversal of the reversal is now your job.
+- A `FLIP` line newer than your entry is a reversal exit. Exit at once by trade-management "How to exit".
+- Your own exits work as usual. When you exit first, add `EXIT`. The team is back in `WATCH`.
+- After your exit, you `HUNT`.
 
 ## Ownership
 
-- You manage and close only positions you opened, with two exceptions:
-  1. A `FLIP` is on the board, the partner's position is still open 2 minutes later, and the partner posted nothing since. Close it, post `NOTE` saying so.
-  2. The effective flat time. Every member closes every position and cancels every order on the account, then confirms the account is flat.
-- Never cancel or replace a partner's resting order, except under those two exceptions.
+Close and change only the positions and orders you opened. Two exceptions:
+
+1. A `FLIP` is on the board, the partner's position is still open 2 minutes later, and the partner posted nothing since. Close it, and post a `NOTE`.
+2. At the effective flat time, each member closes every position and cancels every order on the account. Then confirm the account is flat.
 
 ## Team limits
 
-- `DAILY_LOSS_PCT` is for the team: measure it from the first `JOIN` line's start equity against current equity from `get_portfolio`. When it is reached, append `HALT`. A `HALT` line stops new entries for both members; open positions are still managed and closed.
-- `MAX_ORDERS_PER_DAY` is counted by the gate across both members.
-- Strategy loss-streak pauses count the team's consecutive losses, not just yours.
+- The daily loss limit is the team's. Measure it from the first `JOIN` line's start equity to the current equity from `get_portfolio`. When it is reached, add `HALT`. After `HALT`, neither member opens a position. Open positions are still managed and closed.
+- The gate counts `MAX_ORDERS_PER_DAY` across both members.
+- Loss-streak pauses in a strategy count the team's consecutive losses.
 
-## Talking directly
+## Direct messages
 
-If your tools include `SendMessage` and you can address your partner (A knows B from the Agent tool; B can use `ListAgents`), also send `FLIP`, `HALT`, and urgent `NOTE` lines as a message, for speed. The board stays the record; a message never replaces a board line.
+A knows B from the Agent tool, and B can find A with `ListAgents`. If you have `SendMessage`, also send `FLIP`, `HALT`, and urgent `NOTE` lines as messages. Reason: messages can arrive before the next check. The board is still the record.
 
 ## Review
 
-At the end, each member writes its review in its own note. Member `A` also appends a team review to the board as `NOTE` lines: team net in dollars and R, trades per member, flips taken and how each one did, handoffs that were late (a holder exit more than 1 minute after a `FLIP`), and one question for the user.
+Each member writes its review in its own note. Member `A` adds the team review to the board as `NOTE` lines: team net in dollars and R, trades per member, each flip and its result, late handoffs (a holder exit more than 1 minute after a `FLIP`), and one question for the user.
 
 ## What this is bad at
 
-- Each flip pays two spreads at once, the exit and the new entry. A false reversal costs both.
+- A flip pays two spreads at once. A false reversal costs both.
 - Two sessions use about twice the Claude usage of one.
-- The board is read on each check, so a handoff can lag by up to one check interval.
+- The board is read at each check, so a handoff can wait up to one check interval.

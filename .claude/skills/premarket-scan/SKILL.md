@@ -37,7 +37,7 @@ Skipped: AMD (earnings after close today), META (range too wide pre-market).
 
 ## Data availability
 
-Robinhood's Trading MCP provides quotes (including extended hours), bars with `bounds: extended` for pre-market volume, `get_earnings_calendar`, scans (`run_scan`), and fundamentals. It has no economic calendar. Use what the tools return, fill gaps with a web search, and label anything you could not verify as "unavailable." Do not fabricate a number to complete the format.
+Robinhood's Trading MCP provides quotes (including extended hours), bars with `bounds: extended` for pre-market volume, `get_earnings_calendar`, scans (`run_scan`), and fundamentals. It has no economic calendar. Use what the tools return. Fill gaps with a web search. Label anything you could not verify as "unavailable." Do not invent a number to complete the format.
 
 ## Rules
 

@@ -6,7 +6,7 @@ user-invocable: false
 
 # Index pair read
 
-Broad index ETFs move together most of the day. Holding one position in each is nearly the same bet twice, so a signal goes into **one** of them, the one that fits best, with the whole size. The other is read as a witness.
+Broad index ETFs move together most of the day. A position in each is nearly the same bet twice. So a signal goes into **one** of them, the one that fits best, with the whole size. The other is read as a witness.
 
 ## Evidence
 
@@ -37,7 +37,12 @@ For a long signal in the candidate (mirror for bearish):
 | Above VWAP, trend state `mixed` | Partial | Half of that size, rounded down, but at least 1 contract or the minimum share lot |
 | Below VWAP, or trend state `down` | Disagrees | No entry |
 
-**Divergence while in a trade.** If the candidate makes a new session high and the witness fails to make a new high within 15 minutes, while it was at a session high in the last 60 minutes, flag `diverging`. The trade-management ladder treats it as a reason to tighten: move to the stage-1 breakeven stop at once, if the position is in profit. Divergence never opens a trade and never moves a stop away from price.
+**Divergence while in a trade.** Flag `diverging` when all three are true:
+
+1. The candidate makes a new session high.
+2. The witness made a session high in the last 60 minutes.
+3. The witness makes no new high within 15 minutes.
+ The trade-management ladder treats it as a reason to tighten: move to the stage-1 breakeven stop at once, if the position is in profit. Divergence never opens a trade and never moves a stop away from price.
 
 ## Picking the instrument
 

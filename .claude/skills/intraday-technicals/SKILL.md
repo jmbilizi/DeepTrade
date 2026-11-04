@@ -10,7 +10,7 @@ Indicators describe what price has done. They are inputs to a strategy's rules, 
 
 ## Getting the data
 
-Use `get_equity_technical_indicators` (one call per indicator type, all symbols in one call, `output: "last:N"`), and `get_equity_historicals` for raw bars. `interval` is required. Request `bounds: "regular"` and set `start_time` early enough to warm up the indicator; for 1-minute and 5-minute bars, the session open is enough for EMA(9) and EMA(20) after the first 20 bars, and the previous session's last hour covers the warm-up before that.
+Use `get_equity_technical_indicators` (one call per indicator type, all symbols in one call, `output: "last:N"`), and `get_equity_historicals` for raw bars. `interval` is required. Request `bounds: "regular"`. Set `start_time` early enough to warm up the indicator. For 1-minute and 5-minute bars, start at the previous session's last hour. Reason: EMA(20) needs 20 bars before its first good value.
 
 | Read | Call | Bars |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ Supertrend returns `value` and `direction` per bar: `1` is up, `-1` is down (obs
 
 Check that the newest value's bar time matches the latest completed bar. Ignore bars marked `interpolated`. If a value is missing or stale, treat that read as unknown, not as neutral.
 
-`get_legend_*` tools change the user's Robinhood charts. Use them only when the user asks to see something on their chart. `create_alert` sends the user a phone notification and needs the user's yes first; alerts fire on 5-minute bars at best, so they are not faster than your own checks.
+`get_legend_*` tools change the user's Robinhood charts. Use them only when the user asks to see something on their chart. `create_alert` sends the user a phone notification. Ask the user first. Alerts fire on 5-minute bars at best, so they are not faster than your own checks.
 
 ## Derived reads
 
@@ -43,7 +43,7 @@ mixed = anything else
 - price crossed VWAP 4 or more times (count 5-minute closes on alternating sides), or
 - the 60-minute high-low range is under 1.5 × ATR(14, 5-minute).
 
-ADX(14) is reported, not part of the flag. It lags: on 2026-11-03 ADX on 5-minute bars stayed under 20 for both index ETFs from about noon to the close, including through the afternoon's clean 3-point drop, and only rose after it. Use ADX above 25 as supporting context for a trend, never as a block.
+ADX(14) is reported, not part of the flag. Reason: it lags. On 2026-11-03, 5-minute ADX stayed under 20 for both index ETFs from noon to the close. That included the afternoon's clean 3-point drop. ADX rose only after it. Use ADX above 25 as supporting context for a trend, never as a block.
 
 **Extension**: `(close - VWAP) / ATR(14, 5-minute)`. Beyond ±2 is stretched; entries in that direction chase.
 

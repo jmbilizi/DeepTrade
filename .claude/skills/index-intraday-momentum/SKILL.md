@@ -39,7 +39,7 @@ upper(t)  = max(open_today, prev_close) * (1 + sigma(t))
 lower(t)  = min(open_today, prev_close) * (1 - sigma(t))
 ```
 
-The `max` and `min` with the prior close widen the band on the gap side, as in the paper, so a gap alone is not read as a break.
+The `max` and `min` with the prior close widen the band on the gap side, as in the paper. Reason: a gap alone is not a break.
 
 ## Parameters
 
@@ -99,7 +99,7 @@ Supports `equity` and `option`. Use the first class in `DEEPTRADE_ALLOWED_ASSET_
 
 The broker force-closes same-day contracts at the contract's `sellout_datetime` from `get_option_instruments`, which can be earlier than `DEEPTRADE_FLAT_BY`. Always read it at entry and record it on the trade card.
 
-Size with the position-sizing skill: the per-order cap sets the contract count, and the premium stop is the tighter of this table's stop and the ceiling.
+Size with position-sizing. The per-order cap sets the contract count. The premium stop is the tighter of this table's stop and the loss ceiling.
 
 ### Choosing the strike
 
@@ -108,7 +108,7 @@ The signal is the trend; the contract only expresses it. Pick the strike closest
 1. Start at the strike nearest the last price: the first strike at or above it for calls, at or below it for puts.
 2. One contract costs the ask × 100. If that is at or under the per-order cap and the cash available, and the contract passes the liquidity and spread rules, take it.
 3. Otherwise step one strike further out of the money, in the trade's direction, and repeat.
-4. Stop stepping when delta falls below 0.20. A contract that far out needs a large move just to break even before the close, so the trend can be right and the trade still lose. If no strike passes by then, skip the signal and journal "no affordable contract".
+4. Stop stepping when delta falls below 0.20. A contract that far out needs a large move to break even before the close. The trend can be right and the trade can still lose. If no strike passes by then, skip the signal and journal "no affordable contract".
 
 Never step into the money to find liquidity; in-the-money contracts cost more, not less. Record on the trade card the strikes you passed over and why.
 
