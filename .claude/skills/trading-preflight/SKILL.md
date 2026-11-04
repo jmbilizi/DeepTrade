@@ -34,9 +34,21 @@ If a class is allowed in `.env` but the account cannot trade it, or the tools ca
 
 Read `get_trade_approval_setting`. If approvals are on, tell the user each order will wait for their approval in the Robinhood app.
 
+### Day trades
+
+FINRA removed the pattern-day-trader designation and its $25,000 minimum, effective 2026-06-04 (Regulatory Notice 26-10). Brokers could phase it in until 2027-10-20. The user confirmed on 2026-11-03 that Robinhood no longer enforces a day-trade limit, so round trips are not counted or limited here. If the broker ever rejects an order or warns about day trades, stop opening positions, keep managing open ones, and tell the user what the broker said.
+
 ## 4. Market and day
 
-Note the date, market status, and orders already journaled today from the session context. If the market is closed for the day, say so and offer research mode.
+Note the date, market status, and orders already journaled today from the session context. The session context reads the NYSE holiday and early-close calendar: it says when today is a holiday, when the market closes early, the moved entry cutoff and flat-by time, and closures in the coming week. Put those in the plan.
+
+Cross-check with the broker, because the calendar can be out of date and markets can close for unscheduled reasons:
+
+- `get_equity_quotes` for an allowed symbol: `state` must be `active`, and during regular hours `venue_last_trade_time` must be recent.
+- For same-day options: today must be in the chain's `expiration_dates` (`get_option_chains`), and each contract's `sellout_datetime` (`get_option_instruments`) gives that contract's real last moment. On an early-close day it is earlier than usual.
+- Trust whichever source is more restrictive. If the broker shows no trading on a day the calendar calls open, or the reverse, tell the user and do not trade until it is clear.
+
+If the market is closed for the day, say so and offer research mode. If the session context says the calendar does not cover today, rely on the broker checks above and tell the user to update the calendar.
 
 ## 5. Strategies
 

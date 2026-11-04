@@ -6,6 +6,8 @@ skills:
   - order-execution
   - premarket-scan
   - opening-range-breakout
+  - intraday-technicals
+  - trade-management
   - position-sizing
   - trade-journal
 mcpServers:

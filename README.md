@@ -22,7 +22,7 @@ you ──► claude --agent day-trader
             └── writes journal/                    every order and every decision
 ```
 
-The model decides. Code checks. Every opening order passes through a deterministic hook that compares it to your limits before it reaches the broker, and Claude Code's own permission prompt asks you before each order unless you choose to allow it. Exits are never blocked by the hook, so the agent can always get flat.
+The model decides. Code checks. Every opening order passes through a deterministic hook that compares it to your limits before it reaches the broker, and the repo's `.claude/settings.json` allows option orders and cancels without a prompt, so the agent can act at signal speed. To approve every order yourself, add `mcp__robinhood-trading__place_option_order` and `mcp__robinhood-trading__cancel_option_order` under `permissions.ask` in `.claude/settings.local.json`, or turn on trade approvals in the Robinhood app. Exits are never blocked by the hook, so the agent can always get flat.
 
 ## Prerequisites
 

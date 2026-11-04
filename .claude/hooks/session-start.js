@@ -22,7 +22,7 @@ function main() {
   } catch {
     /* the gate takes a snapshot itself if this is missing */
   }
-  lines.push(marketStatus(now));
+  lines.push(marketStatus(now, L.fs.existsSync(L.path.join(dir, ".env")) ? env : {}));
 
   if (!L.fs.existsSync(L.path.join(dir, ".env"))) {
     lines.push("No .env file found, so no settings or risk gate limits are set. A trading agent must ask the user to run `cp .env.example .env` and review it before trading.");
@@ -40,6 +40,7 @@ function main() {
     show("no_new_entries_before", "DEEPTRADE_NO_NEW_ENTRIES_BEFORE");
     show("no_new_entries_after", "DEEPTRADE_NO_NEW_ENTRIES_AFTER");
     g.push(`allow_shorts=${L.gateSells(env)}`);
+    g.push(`exposure_guard=${L.truthy(env.DEEPTRADE_EXPOSURE_GUARD)}`);
     if (env.DEEPTRADE_REQUIRE_KNOWN_VALUE) show("require_known_value", "DEEPTRADE_REQUIRE_KNOWN_VALUE");
     lines.push(`Guardrails from .env, enforced by the risk gate: ${g.join(", ")}.`);
 
@@ -72,7 +73,7 @@ function main() {
 
   const count = L.countOpeningOrders(L.path.join(dir, "journal", "orders.jsonl"), now.date);
   lines.push(`Opening orders already journaled for ${now.date}: ${count}.`);
-  lines.push("Order tool calls to Robinhood prompt the user for permission unless they have allowlisted them. The risk gate hook may deny entries that breach .env limits. Exits and cancels are not capped.");
+  lines.push("Option orders and cancels are allowed without a permission prompt by .claude/settings.json unless the user added an ask rule; other order tools prompt the user. The risk gate hook may deny entries that breach .env limits. Exits and cancels are not capped.");
 
   L.emit({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: lines.join("\n") } });
 }
@@ -103,25 +104,62 @@ function checkSettings(dir, env, plan) {
   const after = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_AFTER);
   if (flat === null) out.push(`DEEPTRADE_FLAT_BY=${plan.DEEPTRADE_FLAT_BY.value} is not HH:MM.`);
   else if (after !== null && flat <= after) out.push(`DEEPTRADE_FLAT_BY=${plan.DEEPTRADE_FLAT_BY.value} is not after DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER}, so positions could be opened after the flat-by time.`);
-  for (const k of ["DEEPTRADE_RISK_PER_TRADE_PCT", "DEEPTRADE_MAX_POSITIONS", "DEEPTRADE_DAILY_LOSS_PCT", "DEEPTRADE_CHECK_EVERY_MIN", "DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME"]) {
+  for (const k of ["DEEPTRADE_RISK_PER_TRADE_PCT", "DEEPTRADE_MAX_POSITIONS", "DEEPTRADE_DAILY_LOSS_PCT", "DEEPTRADE_CHECK_EVERY_MIN", "DEEPTRADE_MANAGE_EVERY_MIN", "DEEPTRADE_TEAM_SIZE", "DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME"]) {
     const n = L.num(plan[k].value);
     if (n === null || n <= 0) out.push(`${k}=${plan[k].value} must be a positive number.`);
+  }
+  const team = L.num(plan.DEEPTRADE_TEAM_SIZE.value);
+  if (team !== null && team > 1) {
+    if (!L.truthy(env.DEEPTRADE_EXPOSURE_GUARD)) out.push(`DEEPTRADE_TEAM_SIZE=${team} needs DEEPTRADE_EXPOSURE_GUARD=true, or two agents could open the same position twice.`);
+    const classes = L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((c) => c.toLowerCase());
+    if (classes.length !== 1 || classes[0] !== "option") out.push(`DEEPTRADE_TEAM_SIZE=${team} needs DEEPTRADE_ALLOWED_ASSET_CLASSES=option. The exposure guard that keeps two agents from doubling a position covers option entries only.`);
+    // The order lock is taken before any permission prompt and expires after
+    // 15 s, so a manual approval step on option orders can let both members in.
+    for (const f of ["settings.json", "settings.local.json"]) {
+      try {
+        const ask = (JSON.parse(L.fs.readFileSync(L.path.join(dir, ".claude", f), "utf8")).permissions || {}).ask || [];
+        if (ask.some((r) => /place_option_order|^mcp__robinhood-trading(__\*)?$/.test(String(r)))) out.push(`DEEPTRADE_TEAM_SIZE=${team} cannot be used while .claude/${f} asks for approval of option orders: an approval that takes more than a few seconds lets the second member enter past the order lock. Run one agent, or remove that ask rule.`);
+      } catch {
+        /* no file or not JSON */
+      }
+    }
+    const mp = L.num(plan.DEEPTRADE_MAX_POSITIONS.value);
+    if (mp !== null && mp < 2) out.push(`DEEPTRADE_TEAM_SIZE=${team} needs DEEPTRADE_MAX_POSITIONS of at least 2, so the hunter can flip while the holder exits.`);
   }
   return out;
 }
 
-function marketStatus(now) {
+function marketStatus(now, env) {
   if (!now.ok) return "Market status unknown: timezone could not be resolved.";
-  if (now.weekday === "Saturday" || now.weekday === "Sunday") return "US equity market: closed (weekend). Crypto trades around the clock. Market holidays are not checked by this hook.";
+  const day = L.marketDay(now.date, now.weekday);
+  if (day.status === "weekend") return "US equity market: closed (weekend). Crypto trades around the clock.";
+  if (day.status === "holiday") return `US equity market: closed today, ${now.date}, for ${day.name} (NYSE calendar). No entries; the risk gate blocks them. Crypto trades around the clock.`;
   const open = 9 * 60 + 30;
-  const close = 16 * 60;
+  const close = day.closeMin;
   let s;
   if (now.minutes < 4 * 60) s = "US equity market: closed. Pre-market opens 04:00 local market time.";
   else if (now.minutes < open) s = "US equity market: pre-market session. Regular hours open at 09:30.";
-  else if (now.minutes < close) s = `US equity market: regular hours open. ${close - now.minutes} minutes until the 16:00 close.`;
-  else if (now.minutes < 20 * 60) s = "US equity market: after-hours session. Regular hours closed at 16:00.";
+  else if (now.minutes < close) s = `US equity market: regular hours open. ${close - now.minutes} minutes until the ${L.fmtHHMM(close)} close.`;
+  else if (now.minutes < 20 * 60) s = `US equity market: after-hours session. Regular hours closed at ${L.fmtHHMM(close)}.`;
   else s = "US equity market: closed for the day.";
-  return s + " Market holidays are not checked by this hook; verify with the broker if in doubt.";
+  if (day.status === "early") {
+    const after = L.parseHHMM((env || {}).DEEPTRADE_NO_NEW_ENTRIES_AFTER);
+    const flat = L.parseHHMM(L.planSettings(env || {}).DEEPTRADE_FLAT_BY.value);
+    s += ` Today is an early-close day (NYSE calendar): stocks close at ${L.fmtHHMM(close)}, and same-day options stop earlier. The risk gate moves the entry cutoff ${day.shiftMin} minutes earlier${after !== null ? `, to ${L.fmtHHMM(after - day.shiftMin)}` : ""}. Move the flat-by time the same way${flat !== null ? `, to ${L.fmtHHMM(flat - day.shiftMin)}` : ""}, and use each contract's sellout time if earlier.`;
+  } else if (day.status === "unchecked") {
+    s += ` The hooks' market calendar ends ${L.MARKET_CALENDAR.coveredThrough}, so holidays and early closes are not checked today: verify with the broker, and ask the user to update MARKET_CALENDAR in .claude/hooks/lib.js.`;
+  }
+  const ahead = [];
+  for (let k = 1; k <= 7; k++) {
+    const d = new Date(Date.parse(now.date + "T12:00:00Z") + k * 86400e3);
+    const ds = d.toISOString().slice(0, 10);
+    const wd = d.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+    const md = L.marketDay(ds, wd);
+    if (md.status === "holiday") ahead.push(`${ds} closed (${md.name})`);
+    if (md.status === "early") ahead.push(`${ds} closes early at ${L.fmtHHMM(md.closeMin)}`);
+  }
+  if (ahead.length) s += ` Coming up: ${ahead.join("; ")}.`;
+  return s;
 }
 
 try {

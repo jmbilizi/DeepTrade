@@ -14,7 +14,7 @@ Two records exist. The hook writes one automatically. You write the other.
 
 ## Your record
 
-`journal/YYYY-MM-DD.md`, one file per session, created during the pre-session checklist. Three sections, in this order.
+`journal/YYYY-MM-DD.md`, one file per session, created during the pre-session checklist. In team mode each member writes its own `journal/YYYY-MM-DD-<letter>.md` instead, and the shared board is `journal/YYYY-MM-DD-team.md` (team-play skill). Three sections, in this order.
 
 ### Plan
 

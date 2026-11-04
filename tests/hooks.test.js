@@ -37,8 +37,13 @@ function clearJournal() {
     try { fs.unlinkSync(path.join(ROOT, "journal", f)); } catch { /* absent */ }
   }
 }
+// Every hook runs on a pinned market clock (a regular trading day at 12:00 ET),
+// so results do not depend on when the suite runs: near midnight, on a weekend,
+// or on a market holiday. Tests that need another time pin their own clock.
+const CLOCK = path.join(ROOT, "pinned-clock.js");
+fs.writeFileSync(CLOCK, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); L.localParts = () => ({ ok: true, date: "2026-11-04", weekday: "Wednesday", minutes: 720, text: "Wednesday 2026-11-04 12:00" });\n`);
 function run(hook, payload) {
-  const r = spawnSync("node", [path.join(HOOKS, hook)], {
+  const r = spawnSync("node", ["--require", CLOCK, path.join(HOOKS, hook)], {
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT },
     encoding: "utf8",
@@ -151,16 +156,23 @@ setEnv({ DEEPTRADE_GATE_SELLS: "true", DEEPTRADE_MAX_ORDER_USD: 100 });
 expect("GATE_SELLS: reduce_only still bypasses", gate("place_equity_order", { symbol: "NVDA", side: "sell", quantity: 10, limit_price: 130, reduce_only: true }), "context", "position-reducing");
 
 // ---- time window (relative to now in market time) ----
-const tzNow = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
-const hh = Number(tzNow.find((p) => p.type === "hour").value) % 24;
-const mm = Number(tzNow.find((p) => p.type === "minute").value);
-const plus = (m) => { const t = (hh * 60 + mm + m + 1440) % 1440; return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; };
-setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: plus(-5) });
-expect("NO_NEW_ENTRIES_AFTER in the past denies entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_AFTER");
-setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: plus(5), DEEPTRADE_NO_NEW_ENTRIES_BEFORE: plus(-5) });
-expect("inside window passes", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
-setEnv({ DEEPTRADE_NO_NEW_ENTRIES_BEFORE: plus(5) });
-expect("NO_NEW_ENTRIES_BEFORE in the future denies entry", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_BEFORE");
+// Window tests run on a pinned clock (a regular trading day at 12:00), so they
+// pass at any real time, including near midnight and on market holidays.
+const NOON = path.join(ROOT, "clock-noon.js");
+fs.writeFileSync(NOON, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); L.localParts = () => ({ ok: true, date: "2026-11-04", weekday: "Wednesday", minutes: 720, text: "Wednesday 2026-11-04 12:00" });\n`);
+const gateNoon = (tool, ti) => {
+  const r = spawnSync("node", ["--require", NOON, path.join(HOOKS, "risk-gate.js")], { input: JSON.stringify({ tool_name: `mcp__robinhood-trading__${tool}`, tool_input: ti, cwd: ROOT }), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
+  let out = null;
+  try { out = JSON.parse(r.stdout); } catch { /* none */ }
+  return { code: r.status, out, stderr: r.stderr };
+};
+setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: "11:55" });
+expect("NO_NEW_ENTRIES_AFTER in the past denies entry", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_AFTER");
+setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: "12:05", DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "11:55" });
+expect("inside window passes", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
+setEnv({ DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "12:05" });
+expect("NO_NEW_ENTRIES_BEFORE in the future denies entry", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_BEFORE");
+fs.unlinkSync(NOON);
 
 // ---- journal + daily count (entries only, local date) ----
 setEnv({ DEEPTRADE_MAX_ORDERS_PER_DAY: 2 }); clearJournal();
@@ -237,13 +249,188 @@ j("place_option_order", { account_number: "1", legs: [leg("id-nv", "buy", "open"
 const optRec = fs.readFileSync(path.join(ROOT, "journal", "orders.jsonl"), "utf8").trim().split("\n").map(JSON.parse).pop();
 check("journal records option underlying and gated entry", optRec.symbol === "NVDA" && optRec.gated === true && optRec.asset_class === "option");
 
+// ---- exposure guard and order lock (several agents on one account) ----
+{
+  const J = (f) => path.join(ROOT, "journal", f);
+  const rm = (f) => { try { fs.unlinkSync(J(f)); } catch { /* absent */ } };
+  // Team members can share one session (main plus subagent); the tool call id tells their orders apart.
+  const gs = (ti, session, tu) => run("risk-gate.js", { tool_name: "mcp__robinhood-trading__place_option_order", tool_input: ti, session_id: session, tool_use_id: tu, cwd: ROOT });
+  const js = (tool, ti, resp, session, tu, dur = 1) => run("journal.js", { tool_name: `mcp__robinhood-trading__${tool}`, tool_input: ti, tool_response: resp, session_id: session, tool_use_id: tu, duration_ms: dur, cwd: ROOT });
+  const txt = (o) => [{ type: "text", text: JSON.stringify(o) }];
+  const buy = (id, acct = "A1") => ({ account_number: acct, legs: [leg(id, "buy", "open")], quantity: "1", price: "1.00", type: "limit" });
+  const sell = (id) => ({ account_number: "A1", legs: [leg(id, "sell", "close")], quantity: "1", price: "1.20", type: "limit" });
+  const posRow = (id, qty) => ({ option_id: id, chain_symbol: "SPY", type: "long", quantity: String(qty), pending_buy_quantity: "0" });
+  const openOrd = (id, optId, type, state = "queued") => ({ id, chain_symbol: "SPY", state, legs: [{ option_id: optId, side: "buy", position_effect: "open", option_type: type }] });
+  const TODAY = "2026-11-04"; // the pinned clock's date
+  const later = () => { const t = Date.now() + 5; while (Date.now() < t) { /* order the timestamps */ } };
+  const reads = (rows, orders, acct = "A1") => {
+    later();
+    js("get_option_positions", { account_number: acct, nonzero: true }, txt({ data: { positions: rows } }), "a");
+    js("get_option_orders", { account_number: acct, created_at_gte: TODAY }, txt({ data: { orders } }), "a");
+    setState({ equity: 1000, buying_power: 1000, cash: 1000, updated_at: new Date().toISOString() });
+  };
+  const ENV = { DEEPTRADE_ALLOWED_ASSET_CLASSES: "option", DEEPTRADE_ALLOWED_SYMBOLS: "SPY,QQQ", DEEPTRADE_MAX_ORDER_USD: 200, DEEPTRADE_MAX_ORDERS_PER_DAY: 99, DEEPTRADE_MAX_POSITIONS: 2, DEEPTRADE_EXPOSURE_GUARD: "true" };
+
+  setEnv(ENV);
+  clearJournal(); for (const f of ["option-types.json", "option-positions.json", "option-open-orders.json", "order-lock.json"]) rm(f);
+  js("get_accounts", {}, txt({ data: { accounts: [{ account_number: "A1", agentic_allowed: true }, { account_number: "A2", agentic_allowed: true }] } }), "a");
+  js("get_option_instruments", { chain_symbol: "SPY" }, txt({ data: { instruments: [{ id: "c1", chain_symbol: "SPY", type: "call" }, { id: "c2", chain_symbol: "SPY", type: "call" }, { id: "p1", chain_symbol: "SPY", type: "put" }] } }), "a");
+  check("guard: call/put recorded from instruments", JSON.parse(fs.readFileSync(J("option-types.json"), "utf8")).p1 === "put");
+  setState({ equity: 1000, buying_power: 1000, cash: 1000, updated_at: new Date().toISOString() });
+  expect("guard: entry without broker reads denied", gs(buy("c1"), "a", "t0"), "deny", "no get_option_positions");
+  check("guard: a denied entry does not keep the lock", !fs.existsSync(J("order-lock.json")));
+
+  reads([posRow("c1", 1)], []);
+  later(); js("get_option_positions", { account_number: "A1" }, txt({ error: "rate limited" }), "a");
+  expect("guard: an error response is not read as a flat account", gs(buy("c2"), "a", "t1"), "deny", "no positions list");
+  reads([posRow("c1", 1)], []);
+  later(); js("get_option_positions", { account_number: "A1", option_type: "put" }, txt({ data: { positions: [] } }), "a");
+  expect("guard: a filtered positions read is not complete", gs(buy("c2"), "a", "t2"), "deny", "filtered by option_type");
+  reads([posRow("c1", 1)], []);
+  later(); js("get_option_positions", { account_number: "A2", nonzero: true }, txt({ data: { positions: [] } }), "a");
+  expect("guard: a read of another account does not count", gs(buy("c2"), "a", "t3"), "deny", "different account");
+  reads([posRow("c1", 1)], []);
+  later(); js("get_option_orders", { account_number: "A1", created_at_gte: "2999-01-01" }, txt({ data: { orders: [] } }), "a");
+  expect("guard: an open-orders read from a later date is not complete", gs(buy("p1"), "a", "t4"), "deny", "on or before today");
+  reads([posRow("c1", 1)], []);
+  later(); js("get_option_orders", { account_number: "A1", created_at_gte: TODAY }, txt({ data: { orders: [], next: "cursor2" } }), "a");
+  expect("guard: a paged open-orders read is not complete", gs(buy("p1"), "a", "t5"), "deny", "more pages");
+
+  reads([], []);
+  expect("guard: multi-leg entries are refused", gs({ account_number: "A1", legs: [leg("c2", "buy", "open"), leg("p1", "buy", "open")], quantity: "1", price: "1.00", type: "limit", direction: "debit" }, "a", "t6"), "deny", "more than one leg");
+  expect("guard: flat account, call entry passes and takes the lock", gs(buy("c1"), "a", "tu1"), "context", "order lock");
+  expect("guard: second agent blocked while the lock is held", gs(buy("p1"), "b", "tu2"), "deny", "Order lock");
+  expect("guard: subagent in the same session is blocked too", gs(buy("p1"), "a", "tu3"), "deny", "Order lock");
+  js("cancel_option_order", { account_number: "A1", order_id: "other" }, txt({ data: { accepted: true } }), "a", "tu4");
+  check("guard: another call's record does not release the lock", fs.existsSync(J("order-lock.json")));
+  later(); js("place_option_order", buy("c1"), txt({ data: { order: { id: "ord1", state: "unconfirmed", legs: [{ option_id: "c1", option_type: "call" }] } } }), "a", "tu1");
+  check("guard: journal released the lock after the order was recorded", !fs.existsSync(J("order-lock.json")));
+  setState({ equity: 1000, buying_power: 1000, cash: 1000, updated_at: new Date().toISOString() });
+  expect("guard: reads older than another agent's order are stale", gs(buy("p1"), "b", "t7"), "deny", "came after");
+
+  reads([], [openOrd("ord1", "c1", "call")]);
+  expect("guard: a resting call entry counts as a call", gs(buy("c2"), "b", "t8"), "deny", "open or pending call");
+  expect("guard: opposite direction allowed (the flip)", gs(buy("p1"), "b", "tu9"), "context", "order lock");
+  later(); js("place_option_order", buy("p1"), txt({ data: { order: { id: "ord2", state: "unconfirmed" } } }), "b", "tu9");
+  reads([posRow("c1", 1)], [openOrd("ord2", "p1", "put")]);
+  expect("guard: MAX_POSITIONS counts positions and resting entries across agents", gs(buy("c2"), "a", "t10"), "deny", "DEEPTRADE_MAX_POSITIONS=2");
+  reads([posRow("c1", 1)], [openOrd("ord2", "p1", "put", "rejected")]);
+  expect("guard: a rejected entry is not exposure", gs(buy("p1"), "a", "tu11"), "context", "order lock");
+  rm("order-lock.json");
+  reads([], [openOrd("ord2", "p1", "put", "pending_cancelled")]);
+  expect("guard: an entry whose cancel is in flight still counts", gs(buy("p1"), "a", "t11b"), "deny", "open or pending put");
+  rm("order-lock.json");
+  expect("guard: exits always pass", gs(sell("c1"), "a", "t12"), "context", "position-reducing");
+  later(); js("place_option_order", sell("c1"), txt({ data: { order: { id: "ord3" } } }), "a", "t12");
+  reads([posRow("c1", 0), posRow("p1", 1)], []);
+  expect("guard: after the call is closed, a new call passes (re-entry)", gs(buy("c2"), "a", "tu13"), "context", "order lock");
+  rm("order-lock.json");
+  reads([posRow("zz", 1)], []);
+  expect("guard: open contract of unknown type denied", gs(buy("c2"), "a", "t14"), "deny", "calls or puts");
+
+  const lockAt = (msAgo) => fs.writeFileSync(J("order-lock.json"), JSON.stringify({ owner: "tu-crashed", ts: new Date(Date.now() - msAgo).toISOString() }));
+  reads([], []);
+  lockAt(10000);
+  expect("guard: a lock under 15 s old still blocks", gs(buy("c2"), "a", "t15"), "deny", "Order lock");
+  lockAt(16000);
+  expect("guard: a stale lock older than the reads is replaced", gs(buy("c2"), "a", "tu16"), "context", "order lock");
+  rm("order-lock.json");
+  fs.writeFileSync(J("order-lock.json"), "");
+  expect("guard: an empty lock (being written) is held, not free", gs(buy("c2"), "a", "t17"), "deny", "Order lock");
+  fs.writeFileSync(J("order-lock.json"), "garbage");
+  const old = (Date.now() - 16000) / 1000;
+  fs.utimesSync(J("order-lock.json"), old, old);
+  expect("guard: an old unreadable lock is replaced", gs(buy("c2"), "a", "tu17b"), "context", "order lock");
+  rm("order-lock.json");
+  rm("orders.jsonl");
+  reads([], []);
+  lockAt(16000);
+  // A call that started 20 s ago began before the stale lock was taken.
+  later(); js("get_option_positions", { account_number: "A1", nonzero: true }, txt({ data: { positions: [] } }), "a", "r1", 20000);
+  expect("guard: replacing a stale lock needs reads started after it", gs(buy("c2"), "a", "tu17c"), "deny", "never recorded");
+  rm("order-lock.json");
+  reads([], []);
+  expect("guard: gtc entries are refused", gs({ ...buy("c2"), time_in_force: "gtc" }, "a", "t18"), "deny", "not a day order");
+  later(); js("get_option_orders", { account_number: "A1", created_at_gte: TODAY, agent_initiated: false }, txt({ data: { orders: [] } }), "a");
+  expect("guard: an agent_initiated filter makes the orders read incomplete", gs(buy("c2"), "a", "t18b"), "deny", "filtered by agent_initiated");
+  reads([], []);
+  later(); js("get_option_orders", { account_number: "A1", created_at_gte: TODAY }, txt({ data: { orders: [{ id: "x", state: "queued", legs: [{ option: "https://x/opt/", side: "buy", position_effect: "open" }] }] } }), "a");
+  expect("guard: an open entry without a contract id fails closed", gs(buy("c2"), "a", "t18c"), "deny", "had no contract id");
+  reads([], []);
+  later(); js("get_option_orders", { account_number: "A1", created_at_gte: TODAY }, txt({ data: { orders: [openOrd("o9", "c1", "call")], next: "page2" } }), "a");
+  expect("guard: first page of a paged read is not enough", gs(buy("c2"), "a", "t18d"), "deny", "more pages remain");
+  js("get_option_orders", { account_number: "A1", created_at_gte: TODAY, cursor: "wrong" }, txt({ data: { orders: [] } }), "a");
+  expect("guard: a page that does not follow the last one is refused", gs(buy("c2"), "a", "t18e"), "deny", "without the pages before it");
+  later(); js("get_option_orders", { account_number: "A1", created_at_gte: TODAY }, txt({ data: { orders: [openOrd("o9", "c1", "call")], next: "page2" } }), "a");
+  js("get_option_orders", { account_number: "A1", created_at_gte: TODAY, cursor: "page2" }, txt({ data: { orders: [openOrd("o10", "p1", "put")] } }), "a");
+  expect("guard: all pages read in a row count, across pages", gs(buy("c2"), "a", "t18f"), "deny", "DEEPTRADE_MAX_POSITIONS=2");
+
+  setEnv({ DEEPTRADE_ALLOWED_ASSET_CLASSES: "option", DEEPTRADE_ALLOWED_SYMBOLS: "SPY,QQQ", DEEPTRADE_MAX_ORDER_USD: 200, DEEPTRADE_MAX_ORDERS_PER_DAY: 99 });
+  setState({ equity: 1000, buying_power: 1000, cash: 1000, updated_at: new Date().toISOString() });
+  expect("guard off: no broker reads needed", gs(buy("c2"), "a", "t19"), "context", "within the $200.00 cap");
+  check("guard off: no lock taken", !fs.existsSync(J("order-lock.json")));
+  for (const f of ["option-types.json", "option-positions.json", "option-open-orders.json"]) rm(f);
+}
+
+// ---- gate crash fails closed on entries (order tools may be allowed without a prompt) ----
+{
+  const boom = path.join(ROOT, "boom.js");
+  fs.writeFileSync(boom, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); L.localParts = () => { throw new Error("boom"); };\n`);
+  const crash = (tool, ti) => {
+    const r = spawnSync("node", ["--require", boom, path.join(HOOKS, "risk-gate.js")], { input: JSON.stringify({ tool_name: `mcp__robinhood-trading__${tool}`, tool_input: ti, cwd: ROOT }), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
+    let out = null;
+    try { out = JSON.parse(r.stdout); } catch { /* none */ }
+    return { code: r.status, out, stderr: r.stderr };
+  };
+  expect("crash: an entry is refused", crash("place_option_order", { account_number: "A1", legs: [leg("c1", "buy", "open")], quantity: "1", price: "1.00" }), "deny", "crashed");
+  expect("crash: an exit still goes through with a warning", crash("place_option_order", { account_number: "A1", legs: [leg("c1", "sell", "close")], quantity: "1", price: "1.00" }), "context", "crashed");
+  fs.unlinkSync(boom);
+}
+
 // ---- robustness ----
 expect("garbage stdin silent", run("risk-gate.js", "not json"), "silent");
 clearJournal(); setEnv({ DEEPTRADE_MAX_ORDER_USD: 500 });
 expect("null tool_input on order", gate("place_equity_order", null), "context", "could not find a symbol");
 const ss = run("session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
 check("session-start emits context with opening order count", decision(ss) === "context" && /Opening orders already journaled/.test(ss.out.hookSpecificOutput.additionalContext));
-check("session-start says holidays are not checked", /holidays are not checked/i.test(ss.out.hookSpecificOutput.additionalContext));
+// ---- market calendar (NYSE holidays and early closes) ----
+{
+  const LIB = require(path.join(HOOKS, "lib.js"));
+  check("calendar: Thanksgiving 2026 is a holiday", LIB.marketDay("2026-11-26", "Thursday").status === "holiday");
+  check("calendar: day after Thanksgiving 2026 closes 13:00", LIB.marketDay("2026-11-27", "Friday").closeMin === 13 * 60 && LIB.marketDay("2026-11-27", "Friday").shiftMin === 180);
+  check("calendar: an ordinary day is regular", LIB.marketDay("2026-11-04", "Wednesday").status === "regular");
+  check("calendar: past coverage is unchecked", LIB.marketDay("2028-03-01", "Wednesday").status === "unchecked");
+  // Pin the hooks' clock to a market time on a given date.
+  const atTime = (date, hhmm, weekday) => {
+    const f = path.join(ROOT, `clock-${date}-${hhmm.replace(":", "")}.js`);
+    const [h, m] = hhmm.split(":").map(Number);
+    fs.writeFileSync(f, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); L.localParts = () => ({ ok: true, date: "${date}", weekday: "${weekday}", minutes: ${h * 60 + m}, text: "${weekday} ${date} ${hhmm}" });\n`);
+    return f;
+  };
+  const runAt = (clock, hook, payload) => {
+    const r = spawnSync("node", ["--require", clock, path.join(HOOKS, hook)], { input: JSON.stringify(payload), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
+    let out = null;
+    try { out = JSON.parse(r.stdout); } catch { /* none */ }
+    return { code: r.status, out, stderr: r.stderr };
+  };
+  const entry = { tool_name: "mcp__robinhood-trading__place_equity_order", tool_input: { symbol: "SPY", side: "buy", quantity: 1, limit_price: 100, type: "limit" }, cwd: ROOT };
+  setEnv({ DEEPTRADE_MAX_ORDER_USD: 500, DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity" }); clearJournal();
+  setState({ equity: 4000, buying_power: 4000, cash: 4000, updated_at: new Date().toISOString() });
+  expect("calendar: gate blocks entries on a holiday", runAt(atTime("2026-11-26", "10:30", "Thursday"), "risk-gate.js", entry), "deny", "market holiday");
+  expect("calendar: early close moves the entry cutoff (12:05 > 12:00)", runAt(atTime("2026-11-27", "12:05", "Friday"), "risk-gate.js", entry), "deny", "moved 180 minutes earlier");
+  const before = runAt(atTime("2026-11-27", "11:55", "Friday"), "risk-gate.js", entry);
+  check("calendar: early close still allows entries before the moved cutoff", decision(before) === "context" && !/blocked/.test(JSON.stringify(before.out)));
+  expect("calendar: gate blocks entries after an early close", runAt(atTime("2026-11-27", "13:10", "Friday"), "risk-gate.js", entry), "deny", "closed early");
+  expect("calendar: exits pass on a holiday", runAt(atTime("2026-11-26", "10:30", "Thursday"), "risk-gate.js", { ...entry, tool_input: { symbol: "SPY", side: "sell", quantity: 1, type: "market" } }), "context", "position-reducing");
+  const ssEarly = runAt(atTime("2026-11-27", "09:00", "Friday"), "session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
+  const early = (ssEarly.out && ssEarly.out.hookSpecificOutput.additionalContext) || "";
+  check("calendar: session start reports an early close with moved times", /early-close day/.test(early) && /to 12:00/.test(early) && /to 12:50/.test(early));
+  const ssHol = runAt(atTime("2026-11-26", "09:00", "Thursday"), "session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
+  check("calendar: session start reports a holiday", /closed today, 2026-11-26, for Thanksgiving Day/.test((ssHol.out && ssHol.out.hookSpecificOutput.additionalContext) || ""));
+  const ssWeek = runAt(atTime("2026-11-23", "09:00", "Monday"), "session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
+  check("calendar: session start lists closures in the coming week", /Coming up: 2026-11-26 closed \(Thanksgiving Day\); 2026-11-27 closes early at 13:00/.test((ssWeek.out && ssWeek.out.hookSpecificOutput.additionalContext) || ""));
+  for (const f of fs.readdirSync(ROOT)) if (f.startsWith("clock-")) fs.unlinkSync(path.join(ROOT, f));
+}
 
 // Settings report and consistency checks.
 const ssCtx = (env) => {
@@ -269,6 +456,18 @@ c = ssCtx({ UNUSUAL_WHALES_API_KEY: "secret-value", DEEPTRADE_UNUSUAL_WHALES_PLA
 check("session-start: Unusual Whales configured with plan, key not shown", /Unusual Whales configured \(mcp__unusual-whales__\* tools, plan basic\)/.test(c) && !/secret-value/.test(c));
 c = ssCtx({ UNUSUAL_WHALES_API_KEY: "x", DEEPTRADE_UNUSUAL_WHALES_PLAN: "pro" });
 check("session-start flags unknown UW plan", /DEEPTRADE_UNUSUAL_WHALES_PLAN=pro is not one of/.test(c));
+c = ssCtx({ DEEPTRADE_MANAGE_EVERY_MIN: "0" });
+check("session-start flags non-positive manage cadence", /DEEPTRADE_MANAGE_EVERY_MIN=0 must be a positive number/.test(c));
+check("session-start: team mode without exposure guard is a problem", /DEEPTRADE_TEAM_SIZE=2 needs DEEPTRADE_EXPOSURE_GUARD=true/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2" })));
+check("session-start: team mode needs 2 positions", /needs DEEPTRADE_MAX_POSITIONS of at least 2/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2", DEEPTRADE_EXPOSURE_GUARD: "true", DEEPTRADE_MAX_POSITIONS: "1", DEEPTRADE_ALLOWED_ASSET_CLASSES: "option" })));
+check("session-start: team mode with shares allowed is a problem", /needs DEEPTRADE_ALLOWED_ASSET_CLASSES=option/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2", DEEPTRADE_EXPOSURE_GUARD: "true", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity,option" })));
+fs.mkdirSync(path.join(ROOT, ".claude"), { recursive: true });
+fs.writeFileSync(path.join(ROOT, ".claude", "settings.local.json"), JSON.stringify({ permissions: { ask: ["mcp__robinhood-trading__place_option_order"] } }));
+check("session-start: team mode with manual order approval is a problem", /asks for approval of option orders/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2", DEEPTRADE_EXPOSURE_GUARD: "true", DEEPTRADE_ALLOWED_ASSET_CLASSES: "option" })));
+fs.unlinkSync(path.join(ROOT, ".claude", "settings.local.json"));
+check("session-start: consistent team mode raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2", DEEPTRADE_EXPOSURE_GUARD: "true", DEEPTRADE_ALLOWED_ASSET_CLASSES: "option" })));
+check("session-start reports exposure guard", /exposure_guard=true/.test(ssCtx({ DEEPTRADE_EXPOSURE_GUARD: "true" })));
+check("session-start reports manage cadence default", /manage_every_min=1 \(default\)/.test(ssCtx({})));
 c = ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "abc" });
 check("session-start flags non-numeric risk", /DEEPTRADE_RISK_PER_TRADE_PCT=abc must be a positive number/.test(c));
 
@@ -283,6 +482,11 @@ expect("guard: Edit to .claude/settings.json denied", guard("Edit", { file_path:
 expect("guard: Write to journal/orders.jsonl denied", guard("Write", { file_path: abs("journal/orders.jsonl"), content: "x" }), "deny", "protected");
 expect("guard: Write to journal/option-ids.json denied", guard("Write", { file_path: abs("journal/option-ids.json"), content: "{}" }), "deny", "protected");
 expect("guard: shell write to journal/option-ids.json denied", guard("Bash", { command: "echo '{}' > journal/option-ids.json" }), "deny");
+for (const f of ["option-types.json", "option-positions.json", "option-open-orders.json", "order-lock.json"]) {
+  expect(`guard: Write to journal/${f} denied`, guard("Write", { file_path: abs(`journal/${f}`), content: "{}" }), "deny", "protected");
+  expect(`guard: shell write to journal/${f} denied`, guard("Bash", { command: `echo '{}' > journal/${f}` }), "deny");
+}
+expect("guard: Edit to the team board allowed", guard("Edit", { file_path: abs("journal/2026-11-04-team.md"), old_string: "a", new_string: "a\nb" }), "silent");
 expect("guard: Write to CLAUDE.md denied (case-insensitive)", guard("Write", { file_path: abs("Claude.md"), content: "x" }), "deny", "protected");
 expect("guard: relative path .env denied", guard("Write", { file_path: ".env", content: "x" }), "deny", "protected");
 expect("guard: Write to journal/session-state.json allowed", guard("Write", { file_path: abs("journal/session-state.json"), content: "{}" }), "silent");
@@ -355,7 +559,7 @@ for (const f of fs.readdirSync(AGENTS).filter((n) => n.endsWith(".md"))) {
 
 // Tidy the temp project by name, no recursive delete: unlink known files, then
 // remove the now-empty directories.
-for (const f of [".env", ".claude/skills/opening-range-breakout/SKILL.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json", "journal/account-state.json", "journal/option-ids.json", "journal/settings-snapshot.json", "journal/agentic-accounts.json"]) {
+for (const f of [".env", ".claude/skills/opening-range-breakout/SKILL.md", "journal/orders.jsonl", "journal/tools-seen.txt", "journal/session-state.json", "journal/account-state.json", "journal/option-ids.json", "journal/settings-snapshot.json", "journal/agentic-accounts.json", "journal/option-types.json", "journal/option-positions.json", "journal/option-open-orders.json", "journal/order-lock.json"]) {
   try { fs.unlinkSync(path.join(ROOT, f)); } catch { /* absent */ }
 }
 for (const d of [".claude/skills/opening-range-breakout", ".claude/skills", ".claude", "journal", ""]) {

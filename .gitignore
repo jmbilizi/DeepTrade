@@ -13,3 +13,8 @@ Thumbs.db
 
 # Node, if tooling is added later
 node_modules/
+
+# Research working files (deep-research output). Final reports worth keeping
+# are copied to docs/research/.
+research_notes/
+reports/
