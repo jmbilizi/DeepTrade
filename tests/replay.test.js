@@ -146,5 +146,30 @@ check("strike walk: nothing fits a tiny cap", simulate({ one: up, entryMin: 600,
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- opening-range-breakout replay (tools/replay/orb.js) ----
+{
+  const O = require("../tools/replay/orb");
+  check("weekly expiry: Monday -> Friday", O.weeklyExpiry("2026-11-02") === "2026-11-06");
+  check("weekly expiry: Friday -> next Friday, never same day", O.weeklyExpiry("2026-11-06") === "2026-11-13");
+  check("weekly expiry: Thanksgiving week still Friday 11-27", O.weeklyExpiry("2026-11-23") === "2026-11-27");
+  check("minutes to expiry count trading days only", O.minutesToExpiry("2026-11-05", 600, "2026-11-06") === 360 + 390 && O.minutesToExpiry("2026-11-25", 600, "2026-11-27") === 360 + 390);
+  const c = O.pickContract("C", 20, 1500, 0.4);
+  check("contract pick: inside the delta band, near 0.5", c && Math.abs(R.optDelta("C", 20, c.K, 1500, 0.4)) >= 0.4 && Math.abs(R.optDelta("C", 20, c.K, 1500, 0.4)) <= 0.6 && Math.abs(c.d - 0.5) < 0.1, JSON.stringify(c));
+  check("contract pick: 0.5 strikes under 25", c && Math.round(c.K * 2) === c.K * 2);
+  // Synthetic day: range 20.00-20.10 (0.5%), then a high-volume close above with price over VWAP.
+  const mk = (i, o, h, l, cl, v) => ({ m: 570 + 5 * i, o, h, l, c: cl, v });
+  const prev = Array.from({ length: 78 }, (_, i) => mk(i, 20, 20.05, 19.95, 20, 1000));
+  const day = [mk(0, 20, 20.1, 20, 20.05, 1000), mk(1, 20.05, 20.1, 20, 20.06, 1000), mk(2, 20.06, 20.1, 20.0, 20.05, 1000), mk(3, 20.05, 20.25, 20.05, 20.22, 2000), ...Array.from({ length: 74 }, (_, i) => mk(i + 4, 20.2, 20.3, 20.15, 20.25, 800))];
+  R.addIndicators({ "2026-11-04": prev, "2026-11-05": day });
+  const sig = O.orbSignal(day, prev, {});
+  check("ORB signal: long break with volume and VWAP", sig && sig.dir === 1 && sig.entryMin === 590 && near(sig.target, 20.1 + 1.5 * 0.1, 1e-9) && sig.stop === 20, JSON.stringify(sig));
+  const quiet = day.map((b, i) => (i === 3 ? { ...b, v: 1200 } : b));
+  check("ORB signal: no break without 1.5x volume", !O.orbSignal(quiet, prev, {}) || O.orbSignal(quiet, prev, {}).entryMin !== 590);
+  const gapPrev = prev.map((b) => ({ ...b, c: 19 }));
+  check("ORB signal: a gap over 3% skips the day", (O.orbSignal(day, gapPrev, {}) || {}).skip === "gap over 3%");
+  const narrow = day.map((b, i) => (i < 3 ? { ...b, h: 20.02, l: 20.0 } : b));
+  check("ORB signal: a range under 0.3% skips the day", (O.orbSignal(narrow, prev, {}) || {}).skip === "range size");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

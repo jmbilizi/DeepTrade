@@ -71,6 +71,7 @@ function replay(opts) {
   const days = Object.keys(m5[syms[0]]).sort().filter((d) => syms.every((s) => m5[s][d] && m1[s][d] && m5[s][d].length >= 70));
   const strategies = opts.strategies.map((n) => {
     if (!STRATEGIES[n]) throw new Error(`unknown strategy ${n}; known: ${Object.keys(STRATEGIES).join(", ")}`);
+    if (!STRATEGIES[n].signal) throw new Error(`${n} is replayed with ${STRATEGIES[n].replay}`);
     return { name: n, ...STRATEGIES[n] };
   });
   const trades = [];

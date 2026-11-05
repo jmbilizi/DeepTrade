@@ -48,8 +48,10 @@ s = idx("2026-11-26", "08:00:00");
 check("holiday: closed with its name, next session Friday", s.phase === "closed" && s.dayName === "Thanksgiving Day" && /Friday 2026-11-27/.test(s.nextSession), JSON.stringify(s));
 s = idx("2026-11-27", "12:00:00");
 check("early close: close 13:00 is reported", s.close === "13:00", JSON.stringify(s));
-s = C.status({ agent: "no-profile-agent", env: { DEEPTRADE_STRATEGIES: "opening-range-breakout", DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "09:35", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" }, nowMs: at("2026-11-05", "08:00:00"), every: "5m" });
+s = C.status({ agent: "no-profile-agent", env: { DEEPTRADE_STRATEGIES: "made-up-strategy", DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "09:35", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" }, nowMs: at("2026-11-05", "08:00:00"), every: "5m" });
 check("no profile, strategy without a code window: uses the gate window and says so", s.window === "09:35-15:00" && /No window in code/.test(s.note || ""), JSON.stringify(s));
+s = C.status({ agent: "no-profile-agent", env: { DEEPTRADE_STRATEGIES: "opening-range-breakout", DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "09:35", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" }, nowMs: at("2026-11-05", "08:00:00"), every: "5m" });
+check("no profile: opening-range-breakout uses its own 09:45-11:00 window", s.window === "09:45-11:00" && !s.note, JSON.stringify(s));
 s = C.status({ agent: "index-0dte-trader", env: { DEEPTRADE_NO_NEW_ENTRIES_AFTER: "10:00", DEEPTRADE_STRATEGIES: "x" }, nowMs: at("2026-11-05", "08:00:00"), every: "5m" });
 check("profile: .env cannot change the window", s.window === "09:50-11:30", JSON.stringify(s));
 

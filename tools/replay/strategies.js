@@ -66,6 +66,13 @@ const STRATEGIES = {
       return null;
     },
   },
+  // .claude/skills/opening-range-breakout/SKILL.md. It trades stocks with weekly options
+  // and exits on the underlying, so its replay is tools/replay/orb.js. The window here
+  // is for tools/clock.js.
+  "opening-range-breakout": {
+    window: { from: "09:45", to: "11:00" },
+    replay: "tools/replay/orb.js",
+  },
   // Baseline: an entry every 30 minutes, direction from a fixed pseudo-random sequence.
   // A strategy that cannot beat this has no edge in the replay.
   random: {
