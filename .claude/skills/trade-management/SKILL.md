@@ -8,11 +8,13 @@ user-invocable: false
 
 Terms are defined in trading-terms. The strategy sets the entry, the strategy stop, the target, and its invalidation. This skill holds every other exit rule. Strategies link here and do not repeat these rules.
 
-The strategy's exits always apply. This skill adds exits. It never removes or loosens one.
+The strategy's exits always apply. This skill adds exits. It never removes or loosens one. The one exception is the bracket, which a strategy chooses: it uses a fixed set of exits.
 
 ## Evidence
 
-No published study tests these rules on long same-day options. The evidence supports two points: trail the main stop on the underlying, and have a defined exit. The ladder, the bank order, and the giveback are practitioner rules, untested here. Each exit costs a spread. Do not add exits. Sources: `docs/research/index-0dte-trade-management.md`.
+No published study tests these rules on long same-day options. The evidence supports two points: trail the main stop on the underlying, and have a defined exit. Each exit costs a spread. Do not add exits. Sources: `docs/research/index-0dte-trade-management.md`.
+
+The ladder and the giveback are practitioner rules, untested here. The bracket has a replay test on 20 sessions, with modeled option prices (`docs/research/replay-2026-11.md`). In that replay the bracket did as well as the ladder variants, with fewer decisions.
 
 ## Before the entry
 
@@ -22,6 +24,31 @@ Write these on the trade card:
 R          = entry - premium stop        options (shares: abs(entry - strategy stop))
 bank price = entry + 1 x R               unless the strategy sets another
 ```
+
+## The bracket
+
+A strategy can choose the bracket instead of the ladder. Then this section replaces "Right after the fill", the swap, the exits table, and the ladder. The strategy gives the bank price, the strategy premium stop, and the time stop. Shares do not use the bracket.
+
+Right after the fill:
+
+1. Rest a bank order for every contract at the bank price. Use `time_in_force: gfd`.
+2. Confirm it is open with `get_option_orders`.
+3. Enforce the premium stop with your position checks. Reason: a contract carries only one resting sell, and the bank order catches 2-to-4-minute spikes.
+
+If you lose contact, the loss is capped by the premium paid, and the broker's sellout closes the position. Say so on the trade card.
+
+At each position check, act on the first that is true:
+
+| # | Exit | Condition |
+| --- | --- | --- |
+| 1 | flat time | The effective flat time is reached. |
+| 2 | premium stop | The bid reaches the premium stop. |
+| 3 | strategy stop | The underlying crosses the strategy stop, as the strategy defines the cross. |
+| 4 | bank order | The bank order fills. The trade is done. |
+| 5 | time stop | The strategy's time stop has passed since the fill. Exit at the bid. |
+| 6 | reversal exit | Team mode only: a partner's `FLIP` line newer than your entry (team-play). |
+
+Outside row 6, the reversal exit does not apply. The momentum bank, counter-trend exit, breakeven stop, and giveback do not apply. Reason: the replay tested the bracket without them (`docs/research/replay-2026-11.md`). Exit with "How to exit" below.
 
 ## Right after the fill
 
@@ -67,8 +94,6 @@ If a check ran more than 1 minute late, rebuild the bars you missed before step 
 | 9 | breakeven stop | Stage 1, and stage 0 after the 1-contract swap | The bid falls to entry. |
 | 10 | giveback | Stage 2, and stage 3 (which can start from stage 1) | The bid falls below `peak − g × (peak − entry)`. `g` is 0.4, or 0.25 in stage 3. |
 | 11 | time stop | Stage 0, options | After 13:00, the bid made no new peak for 30 minutes. Reason: time decay is about 15% of an at-the-money same-day option's value per hour at midday, more after 14:30. |
-
-A strategy can make the time stop and bank price earlier late in the day (index-trend-scalp, Late session). Use the strategy's values when it does.
 
 ### The loss ceiling is not a target
 

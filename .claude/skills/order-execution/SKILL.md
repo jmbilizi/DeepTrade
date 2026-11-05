@@ -74,4 +74,5 @@ If the user declines a permission prompt, treat it as a no.
 - A tool returns an error twice in a row.
 - Quotes stop updating or disagree with each other.
 - The daily loss limit is reached. Stop for the day and write the review.
+- The daily profit target is reached. Open no new position. Manage open ones to their exits, then write the review. In team mode, count the team's realized profit.
 - The user asks for something outside the plan. Explain the rule, and name the `.env` setting they can change.

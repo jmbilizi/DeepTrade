@@ -474,6 +474,10 @@ check("session-start: a 5% ceiling on shares only is not flagged", !/RISK_PER_TR
 check("session-start: risk over 100 is flagged", /DEEPTRADE_RISK_PER_TRADE_PCT=150 is over 100/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "150" })));
 check("session-start: a daily limit under one full loss is flagged", /DEEPTRADE_DAILY_LOSS_PCT=1.5 is less than one full loss/.test(ssCtx({ DEEPTRADE_DAILY_LOSS_PCT: "1.5" })));
 check("session-start: risk 25 raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "25" })));
+check("session-start: daily profit target defaults to 0 (off)", /daily_profit_target_pct=0 \(default\)/.test(ssCtx({})));
+check("session-start: a positive daily profit target raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_DAILY_PROFIT_TARGET_PCT: "4" })) && /daily_profit_target_pct=4[,.]/.test(ssCtx({ DEEPTRADE_DAILY_PROFIT_TARGET_PCT: "4" })));
+check("session-start: a negative daily profit target is flagged", /DEEPTRADE_DAILY_PROFIT_TARGET_PCT=-1 must be 0/.test(ssCtx({ DEEPTRADE_DAILY_PROFIT_TARGET_PCT: "-1" })));
+check("session-start: a non-numeric daily profit target is flagged", /DEEPTRADE_DAILY_PROFIT_TARGET_PCT=lots must be 0/.test(ssCtx({ DEEPTRADE_DAILY_PROFIT_TARGET_PCT: "lots" })));
 c = ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "abc" });
 check("session-start flags non-numeric risk", /DEEPTRADE_RISK_PER_TRADE_PCT=abc must be a positive number/.test(c));
 

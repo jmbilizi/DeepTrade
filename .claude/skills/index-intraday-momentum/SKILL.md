@@ -89,7 +89,7 @@ Supports `equity` and `option`. Use the first class in `DEEPTRADE_ALLOWED_ASSET_
 | Rule | Default |
 | --- | --- |
 | Expiration | Today (same day) |
-| Strike | The closest to the money you can afford: see Choosing the strike |
+| Strike | The strike walk in position-sizing, down to delta 0.20 |
 | Liquidity | Open interest ≥ 1,000 and today's volume ≥ 1,000 |
 | Spread | Ask minus bid ≤ 5% of the mid |
 | Entry | Limit at the mid, never above the ask |
@@ -103,14 +103,7 @@ Size with position-sizing. The per-order cap sets the contract count. The premiu
 
 ### Choosing the strike
 
-The signal is the trend; the contract only expresses it. Pick the strike closest to the money where one contract fits the budget:
-
-1. Start at the strike nearest the last price. For calls, that is the first strike at or above it; for puts, at or below it.
-2. One contract costs the ask × 100. Take the contract if it fits the per-order cap and the cash, and passes the liquidity and spread rules.
-3. Otherwise step one strike further out of the money, in the trade's direction, and repeat.
-4. Stop stepping when delta falls below 0.20. A contract that far out needs a large move to break even before the close. The trend can be right and the trade can still lose. If no strike passes by then, skip the signal and journal "no affordable contract".
-
-Never step into the money to find liquidity; in-the-money contracts cost more, not less. Record on the trade card the strikes you passed over and why.
+Use the strike walk in position-sizing. This strategy stops stepping below delta 0.20.
 
 ## No-trade conditions
 
@@ -126,6 +119,8 @@ Never step into the money to find liquidity; in-the-money contracts cost more, n
 - Same-day options in particular: time decay is steepest in the afternoon, and a correct direction can still lose if the move is slow. Implied volatility often falls after a move. Spreads widen near the close.
 - Event days. The noise area is built from ordinary days and understates the move around a release.
 - Small accounts with a tight per-order cap: near-the-money same-day contracts on large index ETFs can cost more than the cap early in the day. The strike walk then lands further out of the money, where the contract needs a bigger, faster move to pay and decays faster. Some signals will still be skipped at the delta floor.
+- Gap and trend days. The target is measured from the boundary, so it can be behind the price before entry. On 2026-11-04 that skipped every signal.
+- Few trades. Two live sessions (2026-11-03 and 11-04) gave one trade. For small accounts, index-level-scalp and index-trend-scalp fit better.
 
 ## Recording the setup
 

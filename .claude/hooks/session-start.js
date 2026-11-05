@@ -108,6 +108,8 @@ function checkSettings(dir, env, plan) {
     const n = L.num(plan[k].value);
     if (n === null || n <= 0) out.push(`${k}=${plan[k].value} must be a positive number.`);
   }
+  const target = L.num(plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value);
+  if (target === null || target < 0) out.push(`DEEPTRADE_DAILY_PROFIT_TARGET_PCT=${plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value} must be 0 (no target) or a positive number.`);
   // RISK_PER_TRADE_PCT is the most one trade may lose, in percent of what the
   // trade cost. It used to mean percent of equity, where values like 0.5 to 5
   // were normal; as a percent of the trade they put the stop inside the noise.

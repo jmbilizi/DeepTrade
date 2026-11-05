@@ -17,6 +17,7 @@ Each term has one meaning. Other skills use these names and no synonyms. A setti
 | entry | The fill price of the instrument. |
 | bid | The price an exit gets. Use the bid, not the mark, for every exit decision on an option. |
 | peak | The highest bid since entry. Rebuild it from 1-minute option bars after a missed check. Bar highs are trades, so subtract the last spread. |
+| key level | A price in the level map of key-levels: PDH, PDL, PDC, ORH, ORL, OPEN, HOD, LOD, or VWAP. |
 
 ## Risk
 
@@ -29,6 +30,7 @@ Each term has one meaning. Other skills use these names and no synonyms. A setti
 | premium stop | The stop on an option's price: the tighter of the strategy's premium stop and the loss ceiling. |
 | R | The risk unit. For options, `R = entry − premium stop`. For shares, `R = abs(entry − strategy stop)`. |
 | daily loss limit | `DAILY_LOSS_PCT` of start-of-day equity. It stops new entries for the day. |
+| daily profit target | `DAILY_PROFIT_TARGET_PCT` of start-of-day equity, in realized profit today. It stops new entries for the day. 0 means no target. |
 
 ## Orders
 
@@ -37,13 +39,14 @@ Each term has one meaning. Other skills use these names and no synonyms. A setti
 | bank price | `entry + 1 × R`, unless a strategy sets another. |
 | bank order | A resting limit sell at the bank price. |
 | resting order | An order that waits at the broker: the premium stop as a `stop_market`, or the bank order. Each contract has at most one. |
+| bracket | A fixed exit plan from trade-management: a bank order for every contract, the premium stop, the strategy stop, and a time stop. |
 | fast path | The order-execution steps that send an order seconds after a signal. |
 
 ## Time
 
 | Term | Meaning |
 | --- | --- |
-| strategy check | A time when a strategy tests its entry rules: :00 and :30 for index-intraday-momentum, each completed 5-minute bar for index-trend-scalp. |
+| strategy check | A time when a strategy tests its entry rules: :00 and :30 for index-intraday-momentum, each completed 5-minute bar for index-trend-scalp and index-level-scalp. |
 | position check | A check of an open position, every `MANAGE_EVERY_MIN` minutes. |
 | entry start, entry cutoff | The first and last time a strategy may enter today. Inside the gate's `NO_NEW_ENTRIES_BEFORE` to `NO_NEW_ENTRIES_AFTER` window. |
 | sellout | A same-day contract's `sellout_datetime` from the broker. The broker closes the position then. |
@@ -63,7 +66,7 @@ Defined in trade-management. Names to use on the trade card:
 | bank order | The bank order fills. |
 | breakeven stop | After the bank, the bid falls back to entry. |
 | giveback | The bid falls too far from the peak. |
-| time stop | A stage-0 trade makes no new peak for too long. |
+| time stop | A stage-0 trade makes no new peak for too long. In the bracket: the strategy's minutes since the fill have passed. |
 | target | The strategy's target on the underlying. |
 | flat time | The effective flat time. |
 
