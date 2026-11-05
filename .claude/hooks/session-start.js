@@ -28,36 +28,29 @@ function main() {
   if (!L.fs.existsSync(L.path.join(dir, ".env"))) {
     lines.push("No .env file found, so no settings or risk gate limits are set. A trading agent must ask the user to run `cp .env.example .env` and review it before trading.");
   } else {
-    const g = [];
-    const fromProfile = (key) => Boolean(env.__PROFILE && L.agentProfile(env.__PROFILE).settings[key] !== undefined);
-    const show = (label, key) => g.push(`${label}=${env[key] === undefined || env[key] === "" ? "unset" : env[key]}${fromProfile(key) ? " (agent profile)" : ""}`);
-    show("halt", "DEEPTRADE_HALT");
-    show("halt_all", "DEEPTRADE_HALT_ALL");
-    show("max_order_usd", "DEEPTRADE_MAX_ORDER_USD");
-    show("max_order_pct", "DEEPTRADE_MAX_ORDER_PCT");
-    show("max_orders_per_day", "DEEPTRADE_MAX_ORDERS_PER_DAY");
-    show("allowed_asset_classes", "DEEPTRADE_ALLOWED_ASSET_CLASSES");
-    show("allowed_symbols", "DEEPTRADE_ALLOWED_SYMBOLS");
-    if (env.DEEPTRADE_BLOCKED_SYMBOLS) show("blocked_symbols", "DEEPTRADE_BLOCKED_SYMBOLS");
-    show("no_new_entries_before", "DEEPTRADE_NO_NEW_ENTRIES_BEFORE");
-    show("no_new_entries_after", "DEEPTRADE_NO_NEW_ENTRIES_AFTER");
-    g.push(`allow_shorts=${L.gateSells(env)}`);
+    const val = (key) => (env[key] === undefined || String(env[key]).trim() === "" ? "unset" : String(env[key]).trim());
+    const g = ["halt", "halt_all", "max_order_usd", "max_order_pct", "max_orders_per_day"].map((k) => `${k}=${val(`DEEPTRADE_${k.toUpperCase()}`)}`);
+    if (env.DEEPTRADE_BLOCKED_SYMBOLS) g.push(`blocked_symbols=${val("DEEPTRADE_BLOCKED_SYMBOLS")}`);
     g.push(`exposure_guard=${L.truthy(env.DEEPTRADE_EXPOSURE_GUARD)}`);
-    if (env.DEEPTRADE_REQUIRE_KNOWN_VALUE) show("require_known_value", "DEEPTRADE_REQUIRE_KNOWN_VALUE");
-    lines.push(`Guardrails${env.__PROFILE ? "" : " from .env"}, enforced by the risk gate: ${g.join(", ")}.`);
+    if (env.DEEPTRADE_REQUIRE_KNOWN_VALUE) g.push(`require_known_value=${val("DEEPTRADE_REQUIRE_KNOWN_VALUE")}`);
+    lines.push(`Money limits from .env, enforced by the risk gate: ${g.join(", ")}.`);
 
     const plan = L.planSettings(env);
+    const money = Object.keys(L.PLAN_DEFAULTS).map((k) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${plan[k].value}${plan[k].isDefault ? " (default)" : ""}`);
+    lines.push(`Money plan from .env, followed by the agent: ${money.join(", ")}.`);
+
     const prof = L.agentProfile(env.__PROFILE);
-    const owned = (k) => Boolean(prof && prof.settings[k] !== undefined);
-    const p = Object.entries(plan)
-      .filter(([k]) => !(prof && (prof.unused || []).includes(k)))
-      .map(([k, v]) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${v.value}${owned(k) ? " (agent profile)" : v.isDefault ? " (default)" : ""}`);
-    lines.push(`Trading plan${prof ? "" : " from .env"}, followed by the agent: ${p.join(", ")}.`);
     if (prof) {
-      lines.push(`Agent profile ${env.__PROFILE}, built into .claude/hooks/lib.js: ${prof.summary} The risk gate enforces its symbols, asset class, and entry window (the market session for same-day options); .env cannot change them. From .env this agent uses only money limits and switches: the per-order cap, max orders per day, the loss ceiling, the daily loss limit, the daily profit target, halt, blocked symbols, and the exposure guard.`);
-      const ignored = L.overriddenKeys(rawEnv, env.__PROFILE);
-      if (ignored.length) lines.push(`.env sets keys this agent's profile overrides, so they are ignored for this agent: ${ignored.map((k) => `${k}=${String(rawEnv[k]).trim()}`).join(", ")}. Mention it to the user once; it is not a settings problem.`);
+      const shown = L.PROFILE_KEYS.filter((k) => !["DEEPTRADE_GATE_SELLS", "DEEPTRADE_TIMEZONE"].includes(k) && !(prof.unused || []).includes(k));
+      const vals = shown.map((k) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${val(k)}`);
+      lines.push(`Agent profile ${env.__PROFILE}, built into .claude/hooks/lib.js; .env cannot change it: ${prof.summary} Settings: ${vals.join(", ")}. The risk gate enforces its symbols, asset classes, and entry window. Market time is America/New_York.`);
+      if (prof.parked) lines.push(`This agent is PARKED: ${prof.parked} Research mode only. The risk gate refuses its entries. Tell the user, and offer research.`);
+    } else {
+      const agents = Object.entries(L.AGENT_PROFILES).filter(([, p]) => !p.parked).map(([n]) => `claude --agent ${n}`);
+      lines.push(`No agent profile for this session${input.agent_type ? ` (agent_type ${input.agent_type})` : ""}, so it cannot open positions; the risk gate refuses entries. Trading agents: ${agents.join(", ")}.`);
     }
+    const retired = L.retiredKeys(rawEnv);
+    if (retired.length) lines.push(`.env still sets keys the hooks no longer read; agent profiles own them now: ${retired.map((k) => `${k}=${String(rawEnv[k]).trim()}`).join(", ")}. Tell the user once that they can delete these lines. It is not a settings problem.`);
     lines.push("This context is the complete trading plan. Do not read .env directly; it may hold API keys.");
     const src = L.OPTIONAL_SOURCES.map((s) => {
       const on = Boolean((env[s.key] || "").trim() || (process.env[s.key] || "").trim());
@@ -92,7 +85,7 @@ function main() {
 // Catch settings that contradict each other or point at nothing.
 function checkSettings(dir, env, plan) {
   const out = [];
-  const known = new Set([...L.GUARDRAIL_KEYS, ...Object.keys(L.PLAN_DEFAULTS), ...L.OPTIONAL_SOURCES.map((s) => s.planKey)]);
+  const known = new Set([...L.GUARDRAIL_KEYS, ...Object.keys(L.PLAN_DEFAULTS), ...L.PROFILE_KEYS, ...L.OPTIONAL_SOURCES.map((s) => s.planKey)]);
   for (const s of L.OPTIONAL_SOURCES) {
     const tier = (env[s.planKey] || "").trim().toLowerCase();
     if (tier && !s.plans.includes(tier)) out.push(`${s.planKey}=${tier} is not one of ${s.plans.join(", ")}.`);
@@ -100,6 +93,21 @@ function checkSettings(dir, env, plan) {
   for (const k of Object.keys(env)) {
     if (k.startsWith("DEEPTRADE_") && !known.has(k)) out.push(`${k} is not a known setting (typo?) and is ignored.`);
   }
+  // Behavior settings exist only for an agent with a profile.
+  const prof = L.agentProfile(env.__PROFILE);
+  if (prof) checkProfile(dir, env, plan, prof, out);
+  for (const k of ["DEEPTRADE_RISK_PER_TRADE_PCT", "DEEPTRADE_DAILY_LOSS_PCT"]) {
+    const n = L.num(plan[k].value);
+    if (n === null || n <= 0) out.push(`${k}=${plan[k].value} must be a positive number.`);
+  }
+  const target = L.num(plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value);
+  if (target === null || target < 0) out.push(`DEEPTRADE_DAILY_PROFIT_TARGET_PCT=${plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value} must be 0 (no target) or a positive number.`);
+  checkMoney(dir, env, plan, out);
+  return out;
+}
+
+// A profile's own consistency: a broken profile is a bug in lib.js, reported like a settings problem.
+function checkProfile(dir, env, plan, prof, out) {
   for (const c of L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((x) => x.toLowerCase())) {
     if (!L.ASSET_CLASSES.includes(c)) out.push(`DEEPTRADE_ALLOWED_ASSET_CLASSES contains "${c}", which is not one of ${L.ASSET_CLASSES.join(", ")}.`);
   }
@@ -115,30 +123,10 @@ function checkSettings(dir, env, plan) {
   const after = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_AFTER);
   if (flat === null) out.push(`DEEPTRADE_FLAT_BY=${plan.DEEPTRADE_FLAT_BY.value} is not HH:MM.`);
   else if (after !== null && flat <= after) out.push(`DEEPTRADE_FLAT_BY=${plan.DEEPTRADE_FLAT_BY.value} is not after DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER}, so positions could be opened after the flat-by time.`);
-  for (const k of ["DEEPTRADE_RISK_PER_TRADE_PCT", "DEEPTRADE_MAX_POSITIONS", "DEEPTRADE_DAILY_LOSS_PCT", "DEEPTRADE_CHECK_EVERY_MIN", "DEEPTRADE_MANAGE_EVERY_MIN", "DEEPTRADE_TEAM_SIZE", "DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME"]) {
+  for (const k of ["DEEPTRADE_MAX_POSITIONS", "DEEPTRADE_CHECK_EVERY_MIN", "DEEPTRADE_MANAGE_EVERY_MIN", "DEEPTRADE_TEAM_SIZE", "DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME"]) {
+    if ((prof.unused || []).includes(k)) continue;
     const n = L.num(plan[k].value);
     if (n === null || n <= 0) out.push(`${k}=${plan[k].value} must be a positive number.`);
-  }
-  const target = L.num(plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value);
-  if (target === null || target < 0) out.push(`DEEPTRADE_DAILY_PROFIT_TARGET_PCT=${plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value} must be 0 (no target) or a positive number.`);
-  // RISK_PER_TRADE_PCT is the most one trade may lose, in percent of what the
-  // trade cost. It used to mean percent of equity, where values like 0.5 to 5
-  // were normal; as a percent of the trade they put the stop inside the noise.
-  const risk = L.num(plan.DEEPTRADE_RISK_PER_TRADE_PCT.value);
-  if (risk !== null && risk > 100) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} is over 100. It is the most one trade may lose, in percent of what the trade cost.`);
-  else if (risk !== null && risk > 0 && risk < 15 && (() => { const c = L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((x) => x.toLowerCase()); return !c.length || c.includes("option"); })()) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} now means the most one trade may lose in percent of the trade's own cost, not of equity. ${risk}% of a same-day option is inside its normal noise, so stops would be hit almost at once. If this was set under the old equity meaning, ask the user to change it (default 25).`);
-  // One full loss (the per-order cap times the ceiling) must fit in the daily
-  // loss limit, or position-sizing shrinks every trade to nothing.
-  const daily = L.num(plan.DEEPTRADE_DAILY_LOSS_PCT.value);
-  if (risk !== null && risk > 0 && risk <= 100 && daily !== null && daily > 0) {
-    const st = L.readState(L.path.join(dir, "journal", L.ACCOUNT_STATE_FILE));
-    const usd = L.num(env.DEEPTRADE_MAX_ORDER_USD);
-    const pctSet = L.num(env.DEEPTRADE_MAX_ORDER_PCT);
-    const capPct = usd !== null && st.equity ? Math.min(usd / st.equity * 100, pctSet !== null ? pctSet : usd / st.equity * 100) : pctSet !== null ? pctSet : usd === null ? L.DEFAULT_MAX_ORDER_PCT : null;
-    if (capPct !== null) {
-      const full = (capPct * risk) / 100;
-      if (daily < full) out.push(`DEEPTRADE_DAILY_LOSS_PCT=${daily} is less than one full loss: a trade at the per-order cap (about ${capPct.toFixed(1)}% of equity) can lose ${risk}% of itself, ${full.toFixed(1)}% of equity. Position-sizing would shrink every trade to fit, so few or none would be placed. Raise the daily limit or lower the cap.`);
-    }
   }
   const team = L.num(plan.DEEPTRADE_TEAM_SIZE.value);
   if (team !== null && team > 1) {
@@ -159,6 +147,29 @@ function checkSettings(dir, env, plan) {
     if (mp !== null && mp < 2) out.push(`DEEPTRADE_TEAM_SIZE=${team} needs DEEPTRADE_MAX_POSITIONS of at least 2, so the hunter can flip while the holder exits.`);
   }
   return out;
+}
+
+// Money limits that must fit together, for every session.
+function checkMoney(dir, env, plan, out) {
+  // RISK_PER_TRADE_PCT is the most one trade may lose, in percent of what the
+  // trade cost. It used to mean percent of equity, where values like 0.5 to 5
+  // were normal; as a percent of the trade they put the stop inside the noise.
+  const risk = L.num(plan.DEEPTRADE_RISK_PER_TRADE_PCT.value);
+  if (risk !== null && risk > 100) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} is over 100. It is the most one trade may lose, in percent of what the trade cost.`);
+  else if (risk !== null && risk > 0 && risk < 15 && (() => { const c = L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((x) => x.toLowerCase()); return !c.length || c.includes("option"); })()) out.push(`DEEPTRADE_RISK_PER_TRADE_PCT=${risk} now means the most one trade may lose in percent of the trade's own cost, not of equity. ${risk}% of a same-day option is inside its normal noise, so stops would be hit almost at once. If this was set under the old equity meaning, ask the user to change it (default 25).`);
+  // One full loss (the per-order cap times the ceiling) must fit in the daily
+  // loss limit, or position-sizing shrinks every trade to nothing.
+  const daily = L.num(plan.DEEPTRADE_DAILY_LOSS_PCT.value);
+  if (risk !== null && risk > 0 && risk <= 100 && daily !== null && daily > 0) {
+    const st = L.readState(L.path.join(dir, "journal", L.ACCOUNT_STATE_FILE));
+    const usd = L.num(env.DEEPTRADE_MAX_ORDER_USD);
+    const pctSet = L.num(env.DEEPTRADE_MAX_ORDER_PCT);
+    const capPct = usd !== null && st.equity ? Math.min(usd / st.equity * 100, pctSet !== null ? pctSet : usd / st.equity * 100) : pctSet !== null ? pctSet : usd === null ? L.DEFAULT_MAX_ORDER_PCT : null;
+    if (capPct !== null) {
+      const full = (capPct * risk) / 100;
+      if (daily < full) out.push(`DEEPTRADE_DAILY_LOSS_PCT=${daily} is less than one full loss: a trade at the per-order cap (about ${capPct.toFixed(1)}% of equity) can lose ${risk}% of itself, ${full.toFixed(1)}% of equity. Position-sizing would shrink every trade to fit, so few or none would be placed. Raise the daily limit or lower the cap.`);
+    }
+  }
 }
 
 function marketStatus(now, env) {

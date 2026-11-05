@@ -78,6 +78,9 @@ function status({ agent, env, nowMs, every }) {
   const day = L.marketDay(now.date, now.weekday);
   const trading = day.status === "regular" || day.status === "early" || day.status === "unchecked";
   const out = { now: `${now.weekday} ${now.date} ${hhmmss(now.sec)} ET`, day: day.status, dayName: day.name || null };
+  const prof = L.agentProfile(agent);
+  if (!prof) out.cannotTrade = `no agent profile for "${agent || "this session"}": it cannot open positions`;
+  else if (prof.parked) out.cannotTrade = `${agent} is parked: research only`;
   const stepS = every === "1m" ? 60 : 300;
   if (trading) {
     const w = windowFor(agent, env, day);
@@ -128,6 +131,7 @@ function status({ agent, env, nowMs, every }) {
 
 function line(s) {
   const bits = [`${s.now}`, `day ${s.day}${s.dayName ? ` (${s.dayName})` : ""}`, `phase ${s.phase}`];
+  if (s.cannotTrade) bits.push(s.cannotTrade.toUpperCase());
   if (s.window) bits.push(`entry window ${s.window}, close ${s.close}`);
   if (s.nextCheck) bits.push(`next check ${s.nextCheck.slice(11)} in ${s.secondsToNextCheck}s (${s.nextCheckReason})`);
   else if (s.nextCheckReason) bits.push(s.nextCheckReason);

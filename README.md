@@ -82,30 +82,35 @@ Without a key, the server still starts but offers no tools, so nothing errors. C
 
 `mcp__robinhood-trading__*` allows every tool from the server, including options and crypto orders. Do not allowlist anything until you have watched the agent trade in advisory mode and trust its behavior with your limits.
 
-**Risk gate hook.** Reads `.env` and refuses an opening order when any of these is true:
+**Agent profiles.** How each trading agent trades lives in its profile in `AGENT_PROFILES` in `.claude/hooks/lib.js`: its symbols, asset classes, entry window, strategies, max positions, and cadence. The risk gate enforces the profile, keyed by the agent that is running, so editing `.env` cannot change an agent's behavior. A session without a profile, such as a plain `claude` session, cannot open positions. A parked profile (today: the day-trader) can do research but not open positions.
 
-| Setting                                      | Refuses when                                                                                                                                  |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DEEPTRADE_HALT=true`                        | Any new entry. Exits and cancels still work.                                                                                                  |
-| `DEEPTRADE_HALT_ALL=true`                    | Any order including exits. Only cancels work.                                                                                                 |
-| `DEEPTRADE_MAX_ORDER_USD`                    | Estimated order value exceeds this. Empty by default. Alone, it is the cap while buying power covers it, otherwise 10% of equity.             |
-| `DEEPTRADE_MAX_ORDER_PCT`                    | Estimated order value exceeds this percent of equity. Empty by default, which means 10%. With both set, the lower cap wins.                   |
-| `DEEPTRADE_MAX_ORDERS_PER_DAY`               | This many opening orders were already submitted today, market time.                                                                           |
-| `DEEPTRADE_ALLOWED_SYMBOLS`                  | The symbol is not on this list. Options match by underlying, crypto by base asset. Agents with a profile (index-0dte-trader) use their own list. |
-| `DEEPTRADE_BLOCKED_SYMBOLS`                  | The symbol is on this list.                                                                                                                   |
-| `DEEPTRADE_ALLOWED_ASSET_CLASSES`            | The order looks like a class not listed, out of `equity`, `option`, `crypto`.                                                                 |
-| `DEEPTRADE_NO_NEW_ENTRIES_BEFORE` / `_AFTER` | Current market time is outside the window, `HH:MM`.                                                                                           |
-| `DEEPTRADE_REQUIRE_KNOWN_VALUE=true`         | The gate cannot estimate the order's value, for example a market order with no dollar amount.                                                 |
-| `DEEPTRADE_ALLOW_SHORTS=true`                | Not a refusal by itself: lets strategies short and makes the gate cap plain sells as entries. `DEEPTRADE_GATE_SELLS` still works as an alias. |
-| `DEEPTRADE_TIMEZONE`                         | Not a limit. Market timezone for the time rules, default `America/New_York`.                                                                  |
+| Agent | Profile |
+| ----- | ------- |
+| `index-0dte-trader` | SPY and QQQ same-day options, `index-level-scalp` and `index-trend-scalp`, entries in the options session (09:30 to the 15:45 sellout, moved for early closes), one position at a time. |
+| `day-trader` | Parked. `opening-range-breakout` showed no edge for this account in a replay (`docs/research/replay-orb-2026-11.md`). |
 
-The per-order cap needs your equity and buying power. A hook records them from Robinhood's own `get_portfolio` response for your agentic account, so the agent cannot misstate them. The gate refuses an entry when that read is over 2 minutes old or older than the last order, since every fill changes buying power. If you edit `.env` during a session, the gate refuses the next entry once and tells the agent the new values.
+**Risk gate hook.** Reads your money limits from `.env` and refuses an opening order when any of these is true:
 
-**Trading plan settings.** Also in `.env`, followed by the agent rather than the hook: `DEEPTRADE_STRATEGIES`, `DEEPTRADE_RISK_PER_TRADE_PCT`, `DEEPTRADE_MAX_POSITIONS`, `DEEPTRADE_DAILY_LOSS_PCT`, `DEEPTRADE_FLAT_BY`, `DEEPTRADE_CHECK_EVERY_MIN`, `DEEPTRADE_FRACTIONAL_SHARES`, and the scan filters. `DEEPTRADE_ALLOWED_ASSET_CLASSES` is in order of preference: for each signal the agent uses the first class that both the strategy and your account support. If your account cannot trade a class you allowed, for example no options approval, the agent tells you at session start and skips it. At session start the hook reports every setting with defaults filled in, and flags typos and contradictions such as a flat-by time before the last entry time.
+| Setting                              | Refuses when                                                                                                                      |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `DEEPTRADE_HALT=true`                | Any new entry. Exits and cancels still work.                                                                                      |
+| `DEEPTRADE_HALT_ALL=true`            | Any order including exits. Only cancels work.                                                                                     |
+| `DEEPTRADE_MAX_ORDER_USD`            | Estimated order value exceeds this. Empty by default. Alone, it is the cap while buying power covers it, otherwise 10% of equity. |
+| `DEEPTRADE_MAX_ORDER_PCT`            | Estimated order value exceeds this percent of equity. Empty by default, which means 10%. With both set, the lower cap wins.       |
+| `DEEPTRADE_MAX_ORDERS_PER_DAY`       | This many opening orders were already submitted today, market time.                                                               |
+| `DEEPTRADE_BLOCKED_SYMBOLS`          | The symbol is on this list, even if the agent's profile allows it.                                                                |
+| `DEEPTRADE_REQUIRE_KNOWN_VALUE=true` | The gate cannot estimate the order's value, for example a market order with no dollar amount.                                     |
+| `DEEPTRADE_EXPOSURE_GUARD=true`      | Option entries: the broker's positions and open orders were not read just before, or the entry would exceed the profile's max positions. |
+
+It also refuses an entry outside the profile's symbols, asset classes, or entry window, and on market holidays.
+
+The per-order cap needs your equity and buying power. A hook records them from Robinhood's own `get_portfolio` response for your agentic account, so the agent cannot misstate them. The gate refuses an entry when that read is over 2 minutes old or older than the last order, since every fill changes buying power. If you edit a money limit during a session, the gate refuses the next entry once and tells the agent the new values.
+
+**Money plan settings.** Also in `.env`, followed by the agent: `DEEPTRADE_RISK_PER_TRADE_PCT` (the loss ceiling, in percent of each trade's cost), `DEEPTRADE_DAILY_LOSS_PCT`, and `DEEPTRADE_DAILY_PROFIT_TARGET_PCT`. At session start the hook reports every setting with defaults filled in, flags typos and contradictions, and lists keys from older versions that it now ignores.
 
 **File guard.** Trading agents carry a hook in their own definition that denies them write access to `.env`, `.mcp.json`, `CLAUDE.md`, the settings files, the hooks, the agent definitions, and the hook-written journal files. A normal `claude` session in the repo is not restricted, so you can still ask Claude to improve the hooks or skills. The guard only applies after you accept the workspace trust dialog the first time you open the repo.
 
-**What the gate cannot do.** It estimates value from the fields it recognizes in the request, so an unfamiliar payload shape can make the estimate unknown. It never sees fills, so it does not enforce stop losses, the daily loss limit, or position counts. Those live in the agent's instructions and the `.env` plan settings. Treat the gate as a seat belt, not a cage.
+**What the gate cannot do.** It estimates value from the fields it recognizes in the request, so an unfamiliar payload shape can make the estimate unknown. It never sees fills, so it does not enforce stop losses, the daily loss limit, or position counts. Those live in the agent's instructions, its profile, and the `.env` money plan. Treat the gate as a seat belt, not a cage.
 
 ## What's in the box
 
@@ -142,9 +147,9 @@ The per-order cap needs your equity and buying power. A hook records them from R
 
 Everything is plain markdown and small scripts.
 
-- **Change the strategy.** Edit a skill under `.claude/skills/`, or copy one to a new folder and add its name to `DEEPTRADE_STRATEGIES`.
-- **Change the agent.** Edit `.claude/agents/day-trader.md`. The body is its system prompt.
-- **Add an agent.** Drop a new `.md` in `.claude/agents/`, copy the `hooks` block from `day-trader.md`, and preload the shared skills. Put only what makes it a different trader in the agent; see "Agent or skill" in `CLAUDE.md`. A swing trader, an options income agent, a research-only analyst.
+- **Change the strategy.** Edit a skill under `.claude/skills/` and its code in `tools/replay/strategies.js`, then replay it (strategy-replay skill). To add one to an agent, list it in the agent's profile in `.claude/hooks/lib.js` and preload it in the agent file.
+- **Change the agent.** Edit `.claude/agents/index-0dte-trader.md`. The body is its system prompt.
+- **Add an agent.** Drop a new `.md` in `.claude/agents/`, copy the `hooks` block from `index-0dte-trader.md`, preload the shared skills, and add its profile to `AGENT_PROFILES` (the tests check that every profile key is set). Put only what makes it a different trader in the agent; see "Agent or skill" in `CLAUDE.md`. A swing trader, an options income agent, a research-only analyst.
 - **Add a tool.** Add an optional data server to `.mcp.json`. See the Unusual Whales entry and the steps in `CLAUDE.md`.
 - **Remove anything.** Delete the file. Nothing else depends on it.
 

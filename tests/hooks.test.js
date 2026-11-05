@@ -19,8 +19,19 @@ let fail = 0;
 const NOW = new Date().toISOString();
 const OLD = new Date(Date.now() - 30 * 3600e3).toISOString();
 
-function setEnv(obj, { keepSnapshot = false } = {}) {
-  fs.writeFileSync(path.join(ROOT, ".env"), Object.entries(obj).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
+// Behavior settings live in agent profiles, not .env. Tests run as "test-agent",
+// a profile built from the behavior keys a test sets (on top of the old .env
+// defaults), injected at load time like the pinned clock. raw: true writes every
+// key to .env instead, to test that the hooks ignore behavior keys there.
+const LIBT = require(path.join(HOOKS, "lib.js"));
+const PROFILE_FILE = path.join(ROOT, "test-profile.json");
+const PROFILE_PRELOAD = path.join(ROOT, "test-profile.js");
+fs.writeFileSync(PROFILE_PRELOAD, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); let p = {}; try { p = JSON.parse(require("fs").readFileSync(${JSON.stringify(PROFILE_FILE)}, "utf8")); } catch { /* none */ } L.AGENT_PROFILES["test-agent"] = { summary: "Test agent.", settings: { ...L.NO_PROFILE_SETTINGS, DEEPTRADE_STRATEGIES: "opening-range-breakout", DEEPTRADE_MAX_POSITIONS: "2", DEEPTRADE_FRACTIONAL_SHARES: "true", DEEPTRADE_SCAN_MIN_PRICE: "10", DEEPTRADE_SCAN_MIN_AVG_VOLUME: "2000000", ...p }, unused: [] };\n`);
+function setEnv(obj, { keepSnapshot = false, raw = false } = {}) {
+  const money = {}, prof = {};
+  for (const [k, v] of Object.entries(obj)) (!raw && LIBT.PROFILE_KEYS.includes(k) ? prof : money)[k] = v;
+  fs.writeFileSync(path.join(ROOT, ".env"), Object.entries(money).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
+  fs.writeFileSync(PROFILE_FILE, JSON.stringify(Object.fromEntries(Object.entries(prof).map(([k, v]) => [k, String(v)]))));
   // Each test starts as a fresh session unless it is testing a mid-session edit.
   if (!keepSnapshot) try { fs.unlinkSync(path.join(ROOT, "journal", "settings-snapshot.json")); } catch { /* absent */ }
 }
@@ -42,9 +53,11 @@ function clearJournal() {
 // or on a market holiday. Tests that need another time pin their own clock.
 const CLOCK = path.join(ROOT, "pinned-clock.js");
 fs.writeFileSync(CLOCK, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); L.localParts = () => ({ ok: true, date: "2026-11-04", weekday: "Wednesday", minutes: 720, text: "Wednesday 2026-11-04 12:00" });\n`);
+// Hooks run as the test agent unless a payload names its own agent_type.
+const asAgent = (payload) => (payload && typeof payload === "object" && !("agent_type" in payload) ? { ...payload, agent_type: "test-agent" } : payload);
 function run(hook, payload) {
-  const r = spawnSync("node", ["--require", CLOCK, path.join(HOOKS, hook)], {
-    input: typeof payload === "string" ? payload : JSON.stringify(payload),
+  const r = spawnSync("node", ["--require", CLOCK, "--require", PROFILE_PRELOAD, path.join(HOOKS, hook)], {
+    input: typeof payload === "string" ? payload : JSON.stringify(asAgent(payload)),
     env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT },
     encoding: "utf8",
   });
@@ -77,6 +90,15 @@ function check(name, cond) {
 
 const BASE = { DEEPTRADE_MAX_ORDER_USD: 500, DEEPTRADE_MAX_ORDER_PCT: 10, DEEPTRADE_MAX_ORDERS_PER_DAY: 3, DEEPTRADE_ALLOWED_SYMBOLS: "QQQ,SPY,NVDA,BTC", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity" };
 
+// ---- agent profiles are complete ----
+for (const [name, prof] of Object.entries(LIBT.AGENT_PROFILES)) {
+  const missing = LIBT.PROFILE_KEYS.filter((k) => !(k in prof.settings));
+  check(`profile ${name} sets every profile key${missing.length ? ` (missing ${missing.join(", ")})` : ""}`, !missing.length);
+  check(`profile ${name} has a summary`, typeof prof.summary === "string" && prof.summary.length > 10);
+}
+check("money keys stay in .env, behavior keys never do", !LIBT.PROFILE_KEYS.some((k) => k in LIBT.PLAN_DEFAULTS) && ["DEEPTRADE_MAX_ORDER_USD", "DEEPTRADE_HALT", "DEEPTRADE_EXPOSURE_GUARD"].every((k) => !LIBT.PROFILE_KEYS.includes(k)));
+check("effectiveEnv drops behavior keys from .env", LIBT.effectiveEnv({ DEEPTRADE_ALLOWED_SYMBOLS: "XYZ", DEEPTRADE_MAX_ORDER_USD: "250" }, "nobody").DEEPTRADE_ALLOWED_SYMBOLS === "" && LIBT.effectiveEnv({ DEEPTRADE_MAX_ORDER_USD: "250" }, "nobody").DEEPTRADE_MAX_ORDER_USD === "250");
+
 // ---- classification ----
 setEnv(BASE); setState({ equity: 4000, cash: 3000, updated_at: NOW }); clearJournal();
 expect("read tool get_equity_quotes is silent", gate("get_equity_quotes", { symbols: ["NVDA"] }), "silent");
@@ -98,7 +120,11 @@ expect("sell_to_open option is NOT reducing", gate("place_option_order", { symbo
 // ---- entries ----
 expect("both caps set -> lower wins (pct 400)", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 2, limit_price: 130 }), "context", "within the $400.00 cap");
 expect("both caps set -> over the lower denied", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 4, limit_price: 130 }), "deny", "exceeds the per-order cap of $400.00");
-expect("buy non-allowed symbol denied", gate("place_equity_order", { symbol: "AAPL", side: "buy", quantity: 1, limit_price: 1 }), "deny", "not in DEEPTRADE_ALLOWED_SYMBOLS");
+setEnv({ ...BASE, DEEPTRADE_ALLOWED_SYMBOLS: "QQQ,SPY,NVDA,BTC" });
+fs.appendFileSync(path.join(ROOT, ".env"), "DEEPTRADE_ALLOWED_SYMBOLS=AAPL\n");
+expect(".env cannot widen the profile's symbols", gate("place_equity_order", { symbol: "AAPL", side: "buy", quantity: 1, limit_price: 1 }), "deny", "test-agent profile");
+setEnv(BASE);
+expect("buy non-allowed symbol denied", gate("place_equity_order", { symbol: "AAPL", side: "buy", quantity: 1, limit_price: 1 }), "deny", "is not in the test-agent profile (allowed_symbols=");
 expect("buy with no symbol and allowlist set denied", gate("place_equity_order", { side: "buy", quantity: 1, limit_price: 1 }), "deny", "could not find a symbol");
 expect("nested trailing.value does not shrink estimate", gate("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 100, limit_price: 130, trailing: { value: 2, unit: "percent" } }), "deny", "exceeds");
 expect("market order with bogus price is unknown value", gate("place_equity_order", { symbol: "NVDA", side: "buy", type: "market", quantity: 1000, price: 0.01 }), "context", "could not estimate");
@@ -161,17 +187,17 @@ expect("GATE_SELLS: reduce_only still bypasses", gate("place_equity_order", { sy
 const NOON = path.join(ROOT, "clock-noon.js");
 fs.writeFileSync(NOON, `const L = require(${JSON.stringify(path.join(HOOKS, "lib.js"))}); L.localParts = () => ({ ok: true, date: "2026-11-04", weekday: "Wednesday", minutes: 720, text: "Wednesday 2026-11-04 12:00" });\n`);
 const gateNoon = (tool, ti) => {
-  const r = spawnSync("node", ["--require", NOON, path.join(HOOKS, "risk-gate.js")], { input: JSON.stringify({ tool_name: `mcp__robinhood-trading__${tool}`, tool_input: ti, cwd: ROOT }), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
+  const r = spawnSync("node", ["--require", NOON, "--require", PROFILE_PRELOAD, path.join(HOOKS, "risk-gate.js")], { input: JSON.stringify(asAgent({ tool_name: `mcp__robinhood-trading__${tool}`, tool_input: ti, cwd: ROOT })), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
   let out = null;
   try { out = JSON.parse(r.stdout); } catch { /* none */ }
   return { code: r.status, out, stderr: r.stderr };
 };
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: "11:55" });
-expect("NO_NEW_ENTRIES_AFTER in the past denies entry", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_AFTER");
+expect("NO_NEW_ENTRIES_AFTER in the past denies entry", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "no_new_entries_after=11:55");
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_AFTER: "12:05", DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "11:55" });
 expect("inside window passes", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "context", "within the");
 setEnv({ DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "12:05" });
-expect("NO_NEW_ENTRIES_BEFORE in the future denies entry", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "NO_NEW_ENTRIES_BEFORE");
+expect("NO_NEW_ENTRIES_BEFORE in the future denies entry", gateNoon("place_equity_order", { symbol: "NVDA", side: "buy", quantity: 1, limit_price: 1 }), "deny", "no_new_entries_before=12:05");
 fs.unlinkSync(NOON);
 
 // ---- journal + daily count (entries only, local date) ----
@@ -408,7 +434,7 @@ check("session-start emits context with opening order count", decision(ss) === "
     return f;
   };
   const runAt = (clock, hook, payload) => {
-    const r = spawnSync("node", ["--require", clock, path.join(HOOKS, hook)], { input: JSON.stringify(payload), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
+    const r = spawnSync("node", ["--require", clock, "--require", PROFILE_PRELOAD, path.join(HOOKS, hook)], { input: JSON.stringify(asAgent(payload)), env: { ...process.env, CLAUDE_PROJECT_DIR: ROOT }, encoding: "utf8" });
     let out = null;
     try { out = JSON.parse(r.stdout); } catch { /* none */ }
     return { code: r.status, out, stderr: r.stderr };
@@ -433,7 +459,7 @@ check("session-start emits context with opening order count", decision(ss) === "
   {
     for (const sk of ["index-level-scalp", "index-trend-scalp"]) { fs.mkdirSync(path.join(ROOT, ".claude", "skills", sk), { recursive: true }); fs.writeFileSync(path.join(ROOT, ".claude", "skills", sk, "SKILL.md"), "# stub\n"); }
     const profEnv = { DEEPTRADE_MAX_ORDER_USD: 500, DEEPTRADE_ALLOWED_SYMBOLS: "IWM", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "10:00", DEEPTRADE_STRATEGIES: "no-such-strategy" };
-    setEnv(profEnv); clearJournal();
+    setEnv(profEnv, { raw: true }); clearJournal();
     const fresh = () => setState({ equity: 4000, buying_power: 4000, cash: 4000, updated_at: new Date().toISOString() });
     fresh();
     j("get_option_instruments", { chain_symbol: "SPY" }, { data: { instruments: [{ id: "id-spy", chain_symbol: "SPY" }, { id: "id-iwm", chain_symbol: "IWM" }] } });
@@ -447,29 +473,37 @@ check("session-start emits context with opening order count", decision(ss) === "
     expect("profile: no entry after the 15:45 sellout", idx(atTime("2026-11-04", "15:50", "Wednesday"), legOpen("id-spy")), "deny", "no_new_entries_after=15:45");
     expect("profile: early close moves the session cutoff (12:50 > 12:45)", idx(atTime("2026-11-27", "12:50", "Friday"), legOpen("id-spy")), "deny", "moved 180 minutes earlier");
     expect("profile: exits pass outside the session", idx(atTime("2026-11-04", "15:55", "Wednesday"), { account_number: "1", legs: [{ option_id: "id-spy", side: "sell", position_effect: "close", ratio_quantity: 1 }], quantity: "1", price: "1.00", type: "limit" }), "context", "position-reducing");
-    expect("no profile: another agent still gets the .env cutoff", idx(t1100, legOpen("id-spy"), "day-trader"), "deny", "DEEPTRADE_NO_NEW_ENTRIES_AFTER=10:00");
-    expect("no profile: an unknown agent type gets .env", idx(t1100, legOpen("id-spy"), "toString"), "deny", "DEEPTRADE_NO_NEW_ENTRIES_AFTER=10:00");
+    expect("parked: day-trader may not open positions", idx(t1100, legOpen("id-spy"), "day-trader"), "deny", "day-trader is parked");
+    expect("parked: day-trader exits still pass", idx(t1100, { account_number: "1", legs: [{ option_id: "id-spy", side: "sell", position_effect: "close", ratio_quantity: 1 }], quantity: "1", price: "1.00", type: "limit" }, "day-trader"), "context", "position-reducing");
+    expect("no profile: an unknown agent type cannot open positions", idx(t1100, legOpen("id-spy"), "toString"), "deny", "no agent profile (agent_type toString)");
+    expect("no profile: a plain session cannot open positions", idx(t1100, legOpen("id-spy"), ""), "deny", "This session has no agent profile.");
     // Mid-session edits: keys the profile owns change nothing; money limits still re-brief.
-    setEnv(profEnv); clearJournal();
+    setEnv(profEnv, { raw: true }); clearJournal();
     j("get_option_instruments", { chain_symbol: "SPY" }, { data: { instruments: [{ id: "id-spy", chain_symbol: "SPY" }] } });
     idx(t1100, legOpen("id-spy"));
-    setEnv({ ...profEnv, DEEPTRADE_ALLOWED_SYMBOLS: "XYZ", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "09:31", DEEPTRADE_MAX_POSITIONS: "5" }, { keepSnapshot: true });
+    setEnv({ ...profEnv, DEEPTRADE_ALLOWED_SYMBOLS: "XYZ", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "09:31", DEEPTRADE_MAX_POSITIONS: "5" }, { keepSnapshot: true, raw: true });
     expect("profile: editing keys the profile owns does not re-brief", idx(t1100, legOpen("id-spy")), "context");
-    setEnv({ ...profEnv, DEEPTRADE_MAX_ORDER_USD: 300 }, { keepSnapshot: true });
+    setEnv({ ...profEnv, DEEPTRADE_MAX_ORDER_USD: 300 }, { keepSnapshot: true, raw: true });
     expect("profile: editing a money limit still re-briefs", idx(t1100, legOpen("id-spy")), "deny", "changed .env");
     // Session start for the profiled agent.
-    setEnv(profEnv);
+    setEnv(profEnv, { raw: true });
     const ss = runAt(t1100, "session-start.js", { hook_event_name: "SessionStart", source: "startup", agent_type: "index-0dte-trader", cwd: ROOT });
     const sc = (ss.out && ss.out.hookSpecificOutput.additionalContext) || "";
-    check("profile: session start reports the profile and marks its values", /Agent profile index-0dte-trader/.test(sc) && /allowed_symbols=SPY,QQQ \(agent profile\)/.test(sc) && /strategies=index-level-scalp,index-trend-scalp \(agent profile\)/.test(sc));
-    check("profile: session start lists the ignored .env keys", /ignored for this agent: .*DEEPTRADE_ALLOWED_SYMBOLS=IWM/.test(sc));
+    check("profile: session start reports the profile", /Agent profile index-0dte-trader/.test(sc) && /allowed_symbols=SPY,QQQ/.test(sc) && /strategies=index-level-scalp,index-trend-scalp/.test(sc));
+    check("profile: session start lists retired .env keys once, not as a problem", /no longer read; agent profiles own them now: .*DEEPTRADE_ALLOWED_SYMBOLS=IWM/.test(sc) && !/Settings problems/.test(sc));
+    check("profile: money limits come from .env", /max_order_usd=500/.test(sc));
     check("profile: keys the profile owns raise no settings problem", !/Settings problems/.test(sc));
     check("profile: unused scan settings are left out", !/scan_min_price/.test(sc));
-    const ssPlain = runAt(t1100, "session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
-    check("no profile: session start still checks .env strategies", /no-such-strategy" in DEEPTRADE_STRATEGIES has no skill/.test((ssPlain.out && ssPlain.out.hookSpecificOutput.additionalContext) || ""));
+    const ssPlain = runAt(t1100, "session-start.js", { hook_event_name: "SessionStart", source: "startup", agent_type: "", cwd: ROOT });
+    const sp = (ssPlain.out && ssPlain.out.hookSpecificOutput.additionalContext) || "";
+    check("no profile: session start says the session cannot open positions", /No agent profile for this session, so it cannot open positions/.test(sp) && /claude --agent index-0dte-trader/.test(sp) && !/claude --agent day-trader/.test(sp));
+    check("no profile: .env strategies are not checked", !/no-such-strategy" in DEEPTRADE_STRATEGIES has no skill/.test(sp));
+    const ssPark = runAt(t1100, "session-start.js", { hook_event_name: "SessionStart", source: "startup", agent_type: "day-trader", cwd: ROOT });
+    check("parked: session start says research only", /day-trader/.test((ssPark.out && ssPark.out.hookSpecificOutput.additionalContext) || "") && /PARKED/.test((ssPark.out && ssPark.out.hookSpecificOutput.additionalContext) || ""));
     check("snapshot: one briefing per agent profile", (() => { const j = JSON.parse(fs.readFileSync(path.join(ROOT, "journal", "settings-snapshot.json"), "utf8")); return j.byAgent && j.byAgent["*"] && j.byAgent["index-0dte-trader"] && j.byAgent["index-0dte-trader"].DEEPTRADE_ALLOWED_SYMBOLS === "SPY,QQQ"; })());
+    // A flat snapshot from before per-agent snapshots does not re-brief a profiled agent.
     fs.writeFileSync(path.join(ROOT, "journal", "settings-snapshot.json"), JSON.stringify(LIB.settingsSnapshot(LIB.loadEnv(path.join(ROOT, ".env")))));
-    expect("snapshot: an old flat snapshot still works for agents without a profile", idx(t1100, legOpen("id-spy"), "day-trader"), "deny", "DEEPTRADE_NO_NEW_ENTRIES_AFTER=10:00");
+    expect("snapshot: an old flat snapshot does not re-brief a profiled agent", idx(t1100, legOpen("id-spy")), "context");
   }
   for (const f of fs.readdirSync(ROOT)) if (f.startsWith("clock-")) fs.unlinkSync(path.join(ROOT, f));
 }
@@ -481,7 +515,7 @@ const ssCtx = (env) => {
   return (r.out && r.out.hookSpecificOutput && r.out.hookSpecificOutput.additionalContext) || "";
 };
 let c = ssCtx({ DEEPTRADE_MAX_ORDER_USD: 100, DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" });
-check("session-start reports plan defaults", /strategies=opening-range-breakout \(default\)/.test(c) && /flat_by=15:50 \(default\)/.test(c));
+check("session-start reports money defaults and the profile's plan", /daily_loss_pct=10 \(default\)/.test(c) && /Agent profile test-agent/.test(c) && /strategies=opening-range-breakout/.test(c) && /flat_by=15:50/.test(c));
 check("session-start: consistent defaults raise no problems", !/Settings problems/.test(c));
 check("session-start never prints non-DEEPTRADE keys", !/secret-value/.test(ssCtx({ UNUSUAL_WHALES_API_KEY: "secret-value" })));
 c = ssCtx({ DEEPTRADE_FLAT_BY: "14:00", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00" });
@@ -509,7 +543,7 @@ check("session-start: team mode with manual order approval is a problem", /asks 
 fs.unlinkSync(path.join(ROOT, ".claude", "settings.local.json"));
 check("session-start: consistent team mode raises no problem", !/Settings problems/.test(ssCtx({ DEEPTRADE_TEAM_SIZE: "2", DEEPTRADE_EXPOSURE_GUARD: "true", DEEPTRADE_ALLOWED_ASSET_CLASSES: "option" })));
 check("session-start reports exposure guard", /exposure_guard=true/.test(ssCtx({ DEEPTRADE_EXPOSURE_GUARD: "true" })));
-check("session-start reports manage cadence default", /manage_every_min=1 \(default\)/.test(ssCtx({})));
+check("session-start reports the profile's manage cadence", /manage_every_min=1/.test(ssCtx({})));
 check("session-start: risk default is 25 (percent of the trade)", /risk_per_trade_pct=25 \(default\)/.test(ssCtx({})));
 check("session-start: an old equity-style risk value is flagged", /DEEPTRADE_RISK_PER_TRADE_PCT=5 now means the most one trade may lose/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "5" })));
 check("session-start: a 5% ceiling on shares only is not flagged", !/RISK_PER_TRADE_PCT=5 now means/.test(ssCtx({ DEEPTRADE_RISK_PER_TRADE_PCT: "5", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity" })));

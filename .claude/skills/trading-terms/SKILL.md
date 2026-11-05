@@ -49,7 +49,7 @@ Each term has one meaning. Other skills use these names and no synonyms. A setti
 | strategy check | A time when a strategy tests its entry rules: :00 and :30 for index-intraday-momentum, each completed 5-minute bar for index-trend-scalp and index-level-scalp. |
 | position check | A check of an open position, every `MANAGE_EVERY_MIN` minutes. |
 | entry start, entry cutoff | The first and last time a strategy may enter today. Inside the gate's `NO_NEW_ENTRIES_BEFORE` to `NO_NEW_ENTRIES_AFTER` window. |
-| agent profile | Settings built into an agent, in `AGENT_PROFILES` in the hooks. They replace the same `.env` keys. The session context marks them "(agent profile)". |
+| agent profile | How an agent trades, built into the hooks in `AGENT_PROFILES`: symbols, asset classes, entry window, strategies, and cadence. `.env` holds only money limits. The session context lists both. |
 | phase | Where the session is in the trading day: before-open, trading, late, or closed. From session-clock. |
 | sellout | A same-day contract's `sellout_datetime` from the broker. The broker closes the position then. |
 | effective flat time | The earlier of `FLAT_BY` and 10 minutes before the earliest sellout of an open contract. On an early-close day, `FLAT_BY` moves earlier by as much as the close does. |

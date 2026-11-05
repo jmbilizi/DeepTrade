@@ -129,27 +129,67 @@ function describeOrderCap(env) {
   return `${DEFAULT_MAX_ORDER_PCT}% of equity (default; set DEEPTRADE_MAX_ORDER_USD or DEEPTRADE_MAX_ORDER_PCT to change it)`;
 }
 
+// Money plan settings the user sets in .env, with their defaults.
 const PLAN_DEFAULTS = {
-  DEEPTRADE_STRATEGIES: "opening-range-breakout",
   DEEPTRADE_RISK_PER_TRADE_PCT: "25",
-  DEEPTRADE_MAX_POSITIONS: "2",
   DEEPTRADE_DAILY_LOSS_PCT: "10",
   DEEPTRADE_DAILY_PROFIT_TARGET_PCT: "0",
+};
+
+// How an agent trades. These come only from its profile in AGENT_PROFILES;
+// the hooks never read them from .env. A key left in .env is reported once
+// as retired. Guardrail ones are enforced by the gate; plan ones guide the agent.
+const PROFILE_GUARDRAIL_KEYS = [
+  "DEEPTRADE_ALLOWED_ASSET_CLASSES",
+  "DEEPTRADE_ALLOWED_SYMBOLS",
+  "DEEPTRADE_NO_NEW_ENTRIES_BEFORE",
+  "DEEPTRADE_NO_NEW_ENTRIES_AFTER",
+  "DEEPTRADE_ALLOW_SHORTS",
+  "DEEPTRADE_GATE_SELLS",
+  "DEEPTRADE_TIMEZONE",
+];
+const PROFILE_PLAN_KEYS = [
+  "DEEPTRADE_STRATEGIES",
+  "DEEPTRADE_MAX_POSITIONS",
+  "DEEPTRADE_FLAT_BY",
+  "DEEPTRADE_CHECK_EVERY_MIN",
+  "DEEPTRADE_MANAGE_EVERY_MIN",
+  "DEEPTRADE_TEAM_SIZE",
+  "DEEPTRADE_FRACTIONAL_SHARES",
+  "DEEPTRADE_SCAN_MIN_PRICE",
+  "DEEPTRADE_SCAN_MIN_AVG_VOLUME",
+];
+const PROFILE_KEYS = [...PROFILE_GUARDRAIL_KEYS, ...PROFILE_PLAN_KEYS];
+
+// What a session without a profile gets: no symbols, no strategies, no
+// positions. The gate refuses its entries before these are ever used.
+const NO_PROFILE_SETTINGS = {
+  DEEPTRADE_ALLOWED_ASSET_CLASSES: "",
+  DEEPTRADE_ALLOWED_SYMBOLS: "",
+  DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "",
+  DEEPTRADE_NO_NEW_ENTRIES_AFTER: "",
+  DEEPTRADE_ALLOW_SHORTS: "false",
+  DEEPTRADE_GATE_SELLS: "false",
+  DEEPTRADE_TIMEZONE: "America/New_York",
+  DEEPTRADE_STRATEGIES: "",
+  DEEPTRADE_MAX_POSITIONS: "0",
   DEEPTRADE_FLAT_BY: "15:50",
   DEEPTRADE_CHECK_EVERY_MIN: "5",
   DEEPTRADE_MANAGE_EVERY_MIN: "1",
   DEEPTRADE_TEAM_SIZE: "1",
-  DEEPTRADE_FRACTIONAL_SHARES: "true",
-  DEEPTRADE_SCAN_MIN_PRICE: "10",
-  DEEPTRADE_SCAN_MIN_AVG_VOLUME: "2000000",
+  DEEPTRADE_FRACTIONAL_SHARES: "false",
+  DEEPTRADE_SCAN_MIN_PRICE: "",
+  DEEPTRADE_SCAN_MIN_AVG_VOLUME: "",
 };
 
 // ---------- agent profiles ----------
-// An agent with a profile owns how it trades. Its values replace the matching
-// .env keys, so editing those keys cannot change the agent mid-session, and
-// the user's .env holds only money limits and switches for it. Hooks learn the
-// agent from agent_type in every payload (claude --agent <name>, or a subagent).
-// Change a profile here, with tests; never in .env.
+// Every trading agent has a profile: how it trades (PROFILE_KEYS). The user's
+// .env holds only money limits and switches, so editing it cannot change an
+// agent's behavior. Hooks learn the agent from agent_type in every payload
+// (claude --agent <name>, or a subagent). A session without a profile cannot
+// open positions. A parked profile can do research but not open positions.
+// Change a profile here, with tests; never in .env. Each profile sets every
+// key in PROFILE_KEYS (tests/hooks.test.js checks it).
 const AGENT_PROFILES = {
   "index-0dte-trader": {
     summary: "SPY and QQQ same-day options. The universe is the agent's own, not a recommendation: its strategies were written and replayed on these two only (docs/research/replay-2026-11.md).",
@@ -171,9 +211,34 @@ const AGENT_PROFILES = {
       DEEPTRADE_MANAGE_EVERY_MIN: "1",
       DEEPTRADE_TEAM_SIZE: "1",
       DEEPTRADE_FRACTIONAL_SHARES: "false",
+      DEEPTRADE_SCAN_MIN_PRICE: "",
+      DEEPTRADE_SCAN_MIN_AVG_VOLUME: "",
     },
     // Plan keys that mean nothing to this agent; the session report leaves them out.
     unused: ["DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME", "DEEPTRADE_FRACTIONAL_SHARES"],
+  },
+  "day-trader": {
+    summary: "Scanned stocks, opening-range-breakout, shares or weekly options.",
+    parked: "opening-range-breakout showed no edge for this account in a 20-session replay (docs/research/replay-orb-2026-11.md).",
+    settings: {
+      DEEPTRADE_ALLOWED_SYMBOLS: "",
+      DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity,option",
+      DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "09:35",
+      DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:00",
+      DEEPTRADE_FLAT_BY: "15:50",
+      DEEPTRADE_TIMEZONE: DEFAULT_TZ,
+      DEEPTRADE_ALLOW_SHORTS: "false",
+      DEEPTRADE_GATE_SELLS: "false",
+      DEEPTRADE_STRATEGIES: "opening-range-breakout",
+      DEEPTRADE_MAX_POSITIONS: "2",
+      DEEPTRADE_CHECK_EVERY_MIN: "5",
+      DEEPTRADE_MANAGE_EVERY_MIN: "1",
+      DEEPTRADE_TEAM_SIZE: "1",
+      DEEPTRADE_FRACTIONAL_SHARES: "true",
+      DEEPTRADE_SCAN_MIN_PRICE: "10",
+      DEEPTRADE_SCAN_MIN_AVG_VOLUME: "2000000",
+    },
+    unused: [],
   },
 };
 
@@ -181,19 +246,20 @@ function agentProfile(agentType) {
   return Object.prototype.hasOwnProperty.call(AGENT_PROFILES, String(agentType || "")) ? AGENT_PROFILES[agentType] : null;
 }
 
-// The settings that apply to this agent: .env with the profile's keys replaced.
-// Returns a plain object like loadEnv's; __PROFILE names the profile, if any.
+// The settings that apply to this agent: the money keys from .env, and the
+// profile's keys (NO_PROFILE_SETTINGS without a profile). Returns a plain object
+// like loadEnv's; __PROFILE names the profile, if any.
 function effectiveEnv(env, agentType) {
+  const money = {};
+  for (const [k, v] of Object.entries(env || {})) if (!PROFILE_KEYS.includes(k)) money[k] = v;
   const prof = agentProfile(agentType);
-  if (!prof) return env;
-  return { ...env, ...prof.settings, __PROFILE: String(agentType) };
+  if (!prof) return { ...money, ...NO_PROFILE_SETTINGS };
+  return { ...money, ...prof.settings, __PROFILE: String(agentType) };
 }
 
-// .env keys the user set that the profile overrides, with the value set.
-function overriddenKeys(env, agentType) {
-  const prof = agentProfile(agentType);
-  if (!prof) return [];
-  return Object.keys(prof.settings).filter((k) => env[k] !== undefined && String(env[k]).trim() !== "" && String(env[k]).trim() !== prof.settings[k]);
+// Keys still set in .env that the hooks no longer read from it.
+function retiredKeys(env) {
+  return PROFILE_KEYS.filter((k) => env && env[k] !== undefined && String(env[k]).trim() !== "");
 }
 
 const ASSET_CLASSES = ["equity", "option", "crypto"];
@@ -292,12 +358,15 @@ function settingsChanges(oldSnap, newSnap) {
   return out;
 }
 
+// Plan values for the effective settings: money keys (with defaults) and the
+// profile's plan keys.
 function planSettings(env) {
   const out = {};
   for (const [k, d] of Object.entries(PLAN_DEFAULTS)) {
     const set = env[k] !== undefined && String(env[k]).trim() !== "";
     out[k] = { value: set ? String(env[k]).trim() : d, isDefault: !set };
   }
+  for (const k of PROFILE_PLAN_KEYS) out[k] = { value: env[k] === undefined ? "" : String(env[k]).trim(), isDefault: false, fromProfile: true };
   return out;
 }
 
@@ -1080,7 +1149,11 @@ module.exports = {
   AGENT_PROFILES,
   agentProfile,
   effectiveEnv,
-  overriddenKeys,
+  retiredKeys,
+  PROFILE_KEYS,
+  PROFILE_GUARDRAIL_KEYS,
+  PROFILE_PLAN_KEYS,
+  NO_PROFILE_SETTINGS,
   DEFAULT_MAX_ORDER_PCT,
   orderCap,
   describeOrderCap,
