@@ -55,15 +55,16 @@ ADX(14) is reported, not part of the flag. Reason: it lags. On 2026-11-03, 5-min
 
 ## Time-of-day regimes
 
-Market time, regular hours. These are tendencies with mixed evidence, not rules by themselves.
+Market time, regular hours. These are tendencies, not rules by themselves. A tendency is never a reason to enter; it only says which enabled setup fits the window.
 
 | Window | Tendency | Use |
 | --- | --- | --- |
 | 09:30 to 10:00 | Highest volatility, widest option spreads | Most strategies wait. Read the opening drive direction |
-| 10:00 to 11:30 | Trends from the open often continue or fail here | Main window for trend entries |
+| 10:00 to 10:30 | Early moves tend to reverse. On 178 sessions of SPY and QQQ (2026-02 to 2026-11), every trend read here pointed the wrong way for the next hour (t −3 to −4) | Prefer rejections at key levels. Do not chase the opening drive |
+| 10:30 to 11:30 | Moves tend to continue (the trend state leaned right for the next hour, t 2.3) | Main window for trend entries |
 | 11:30 to 13:30 | Lowest volume and volatility; chop is common | Require the chop flag false for new entries |
 | 13:30 to 15:00 | Afternoon trends start; same-day option decay speeds up | Entries only with a clean trend state |
-| Last 30 to 60 min | Momentum tends to continue the day's direction (Gao et al. 2018; Baltussen et al. 2021, on futures) | Same-day options are near the broker's sellout. Whether to open is the strategy's call (index-trend-scalp trades shorter here); spreads widen |
+| Last 30 to 60 min | Momentum tends to continue the day's direction (Gao et al. 2018; Baltussen et al. 2021, on futures) | Same-day options are near the broker's sellout. Whether to open is the strategy's call (the index scalps stop at 11:30); spreads widen |
 
 ## Reporting
 
