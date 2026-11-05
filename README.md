@@ -120,6 +120,7 @@ The per-order cap needs your equity and buying power. A hook records them from R
 | `.claude/skills/index-trend-scalp/`      | Index ETF morning strategy: pullbacks and VWAP reclaims with the 5-minute trend.                      |
 | `.claude/skills/index-intraday-momentum/` | Index ETF strategy: breaks of a volatility-scaled noise area, VWAP trailing stop.                   |
 | `.claude/skills/key-levels/`             | The level map: prior-day high, low, close, opening range, open, session high and low, VWAP.           |
+| `.claude/skills/session-clock/`          | How an agent finds its place in the trading day from any launch time, and how it waits.               |
 | `.claude/skills/strategy-replay/`        | How to test a rule change on past bars with `tools/replay/` before it trades money.                   |
 | `.claude/skills/position-sizing/`        | Fixed-fractional risk sizing for shares, fractional shares, and contracts.                            |
 | `.claude/skills/premarket-scan/`         | How the agent builds the day's watchlist.                                                             |
@@ -132,6 +133,7 @@ The per-order cap needs your equity and buying power. A hook records them from R
 | `.claude/settings.json`                  | Wires the project-wide hooks and allows `sleep`, journal writes, and web search without prompts.      |
 | `tests/hooks.test.js`                    | Regression suite for the hooks. Run with `node tests/hooks.test.js`.                                  |
 | `tests/replay.test.js`                   | Tests for the replay tool. Run with `node tests/replay.test.js`.                                      |
+| `tools/clock.js`                         | Market clock for agents: phase, next check, and an exact wait. Tests: `node tests/clock.test.js`.     |
 | `tools/replay/`                          | Replays strategy rules on saved broker bars with modeled option prices. See `tools/replay/README.md`. |
 | `.mcp.json`                              | Declares the Robinhood Trading MCP server and optional data servers. No secrets inside.               |
 | `.claude/hooks/optional-mcp.js`          | Starts an optional MCP server only when its key is set in `.env`.                                     |
