@@ -16,7 +16,7 @@ Replay, 20 sessions to 2026-11-04 (`docs/research/replay-2026-11.md`): before 11
 
 ## Applies to
 
-- The symbols in `DEEPTRADE_ALLOWED_SYMBOLS`. If it is unset, do not run this strategy, and tell the user it needs an explicit list.
+- The symbols in `ALLOWED_SYMBOLS` from the session context. An agent profile sets them. If none are given, do not run this strategy.
 - Confirm today's expiration for each symbol with `get_option_chains`.
 - With more than one symbol, use index-pair-read to pick the instrument and the size tier.
 
@@ -39,7 +39,7 @@ Run a strategy check on each completed 5-minute bar, from the entry start to the
 
 | Window | Rule |
 | --- | --- |
-| Entry start | `NO_NEW_ENTRIES_BEFORE`, after 3 completed 5-minute bars exist today. The filters decide whether the open is tradable. |
+| Entry start | The bar that closes at 09:50, and not before `NO_NEW_ENTRIES_BEFORE`. Reason: the replay tested entries from then. |
 | Entry cutoff | The bar that closes at 11:30, or `NO_NEW_ENTRIES_AFTER` if that is earlier. Reason: in the replay every setup lost after 11:30. |
 
 ## Filters

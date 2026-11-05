@@ -24,7 +24,10 @@ function main() {
   if (kind === "read" || kind === "cancel") return;
 
   const dir = L.projectDir(input);
-  const env = L.loadEnv(L.path.join(dir, ".env"));
+  // An agent with a profile (lib.js AGENT_PROFILES) gets the profile's values in place of those .env keys.
+  const env = L.effectiveEnv(L.loadEnv(L.path.join(dir, ".env")), input.agent_type);
+  // Names a setting in a denial: the .env key, or the agent profile that owns it.
+  const src = (k) => (env.__PROFILE && L.agentProfile(env.__PROFILE).settings[k] !== undefined ? `the ${env.__PROFILE} profile (${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${env[k]})` : `${k}=${env[k]}`);
   const tz = env.DEEPTRADE_TIMEZONE || L.DEFAULT_TZ;
   const now = L.localParts(tz);
   const notes = [];
@@ -57,15 +60,10 @@ function main() {
   // and list the new values, so the agent re-plans with them before retrying.
   const snapFile = L.path.join(dir, "journal", L.SETTINGS_SNAPSHOT_FILE);
   const snapNow = L.settingsSnapshot(env);
-  let snapOld = null;
-  try {
-    snapOld = JSON.parse(L.fs.readFileSync(snapFile, "utf8"));
-  } catch {
-    /* none yet */
-  }
+  const snapOld = L.readSnapshot(snapFile, env);
   const changed = snapOld ? L.settingsChanges(snapOld, snapNow) : [];
   try {
-    if (!snapOld || changed.length) L.fs.writeFileSync(snapFile, JSON.stringify(snapNow), "utf8");
+    if (!snapOld || changed.length) L.writeSnapshot(snapFile, env, snapNow);
   } catch {
     /* if it cannot be saved the next entry reports the change again */
   }
@@ -84,10 +82,10 @@ function main() {
   const notAfterSet = L.parseHHMM(env.DEEPTRADE_NO_NEW_ENTRIES_AFTER);
   const notAfter = notAfterSet !== null && day.shiftMin ? notAfterSet - day.shiftMin : notAfterSet;
   if (now.ok && notBefore !== null && now.minutes < notBefore) {
-    return deny(`It is ${now.text} ${tz}, before DEEPTRADE_NO_NEW_ENTRIES_BEFORE=${env.DEEPTRADE_NO_NEW_ENTRIES_BEFORE}. New entries are blocked.`);
+    return deny(`It is ${now.text} ${tz}, before ${src("DEEPTRADE_NO_NEW_ENTRIES_BEFORE")}. New entries are blocked.`);
   }
   if (now.ok && notAfter !== null && now.minutes >= notAfter) {
-    const why = day.shiftMin ? `${L.fmtHHMM(notAfter)}, today's entry cutoff (DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER} moved ${day.shiftMin} minutes earlier for the ${L.fmtHHMM(day.closeMin)} early close)` : `DEEPTRADE_NO_NEW_ENTRIES_AFTER=${env.DEEPTRADE_NO_NEW_ENTRIES_AFTER}`;
+    const why = day.shiftMin ? `${L.fmtHHMM(notAfter)}, today's entry cutoff (${src("DEEPTRADE_NO_NEW_ENTRIES_AFTER")} moved ${day.shiftMin} minutes earlier for the ${L.fmtHHMM(day.closeMin)} early close)` : `${src("DEEPTRADE_NO_NEW_ENTRIES_AFTER")}`;
     return deny(`It is ${now.text} ${tz}, at or after ${why}. New entries are blocked. Exits still work.`);
   }
 
@@ -95,7 +93,7 @@ function main() {
   const classes = L.csv(env.DEEPTRADE_ALLOWED_ASSET_CLASSES).map((c) => c.toLowerCase());
   if (classes.length) {
     if (cls === "unknown") notes.push("Risk gate could not tell the asset class of this order, so DEEPTRADE_ALLOWED_ASSET_CLASSES was not enforced. Confirm it is an allowed class.");
-    else if (!classes.includes(cls)) return deny(`This looks like a ${cls} order and DEEPTRADE_ALLOWED_ASSET_CLASSES=${env.DEEPTRADE_ALLOWED_ASSET_CLASSES}. Order refused.`);
+    else if (!classes.includes(cls)) return deny(`This looks like a ${cls} order and ${src("DEEPTRADE_ALLOWED_ASSET_CLASSES")}. Order refused.`);
   }
 
   // Symbol lists.
@@ -106,7 +104,7 @@ function main() {
   if (allowed.length) {
     if (!symbol && resolved.unresolved.length) return deny(`DEEPTRADE_ALLOWED_SYMBOLS is set but the risk gate could not tell the underlying of this option order (${resolved.unresolved.join(", ")}). Look the contract up with get_option_instruments in this session so its underlying is recorded, then retry.`);
     if (!symbol) return deny("DEEPTRADE_ALLOWED_SYMBOLS is set but the risk gate could not find a symbol in this order request, so it cannot verify the symbol. Order refused. Include the symbol in a standard field.");
-    if (!L.symbolAllowed(symbol, allowed)) return deny(`${symbol} is not in DEEPTRADE_ALLOWED_SYMBOLS (${allowed.join(",")}). Order refused.`);
+    if (!L.symbolAllowed(symbol, allowed)) return deny(`${symbol} is not in ${src("DEEPTRADE_ALLOWED_SYMBOLS")}. Order refused.`);
   } else if (!symbol) {
     notes.push("Risk gate could not find a symbol field in this order request.");
   }

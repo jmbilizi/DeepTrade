@@ -14,7 +14,7 @@ On most days an index ETF wanders inside a band around its open whose width is p
 
 ## Applies to
 
-Broad index ETFs whose option chains list a same-day expiration every trading day. The symbols come from `DEEPTRADE_ALLOWED_SYMBOLS`; this skill names none. If that setting is unset, do not run this strategy: tell the user it needs an explicit symbol list. Before the first check, confirm with `get_option_chains` that today is among each symbol's expiration dates. A symbol without a same-day expiration can still be traded in shares if `equity` is allowed; otherwise drop it for the session and say so.
+Broad index ETFs whose option chains list a same-day expiration every trading day. The symbols are `ALLOWED_SYMBOLS` from the session context; an agent profile can set them. If none are given, do not run this strategy. Before the first check, confirm with `get_option_chains` that today is among each symbol's expiration dates. A symbol without a same-day expiration can still be traded in shares if `equity` is allowed; otherwise drop it for the session and say so.
 
 ## Data this strategy needs
 

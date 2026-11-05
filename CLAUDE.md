@@ -8,6 +8,7 @@ Open-source trading agents for Claude Code. Users connect their own Claude accou
 - `.claude/skills/` holds strategies and procedures agents load on demand. One folder per skill, `SKILL.md` inside.
 - `.claude/hooks/` holds Node scripts. `lib.js` has the shared classifier and parsers. `risk-gate.js`, `journal.js`, and `session-start.js` are wired project-wide in `.claude/settings.json`. `protect-files.js` is wired per agent, in the `hooks` frontmatter of each trading agent, so it restricts the trader and not the people developing the repo. Hooks are not discovered automatically.
 - `journal/` is gitignored. Hooks write `orders.jsonl`, `tools-seen.txt`, `option-ids.json` (option contract id to underlying), `account-state.json` (equity and buying power from the broker's `get_portfolio` response for the agentic account), `option-types.json` (contract id to call or put), `option-positions.json` and `option-open-orders.json` (the last `get_option_positions` and `get_option_orders` reads, with whether each was complete), `order-lock.json` (the cross-agent entry lock, held from the gate until the order is recorded), and `settings-snapshot.json` (the settings the agent was briefed with, no API keys). Agents write only daily notes and, in team mode, append lines to the shared team board `YYYY-MM-DD-team.md`. The file guard blocks agents from editing the hook-written files.
+- `AGENT_PROFILES` in `.claude/hooks/lib.js` holds the built-in settings of agents made for one instrument set (today: index-0dte-trader). The gate and session start use them in place of the matching `.env` keys.
 - `tools/replay/` replays strategy rules on saved broker bars with modeled option prices (strategy-replay skill). Plain Node, no dependencies. Bars live in `journal/replay/`. `tools/replay/strategies.js` mirrors each index strategy's rules in code.
 - `.mcp.json` declares the Robinhood Trading MCP, which is required and uses browser OAuth, and optional data MCPs such as Unusual Whales. Optional servers start through `.claude/hooks/optional-mcp.js`, which reads their key from `.env` and serves an empty server with no tools when the key is unset, so users without a key see no errors.
 - `.env` is the only settings file: guardrails the risk gate enforces and the trading plan the agent follows. Defaults live in `PLAN_DEFAULTS` in `lib.js`. `session-start.js` reports every setting to the agent and flags conflicts, so agents never read `.env` directly. Never commit it. `.env.example` documents every key and ships working defaults.
@@ -27,7 +28,7 @@ Open-source trading agents for Claude Code. Users connect their own Claude accou
 
 ## Examples are not advice
 
-Defaults in `.env.example` and strategy skills are risk limits chosen to be conservative and consistent with each other, so the repo works without edits. They are not recommendations. No ticker is ever a default. Any ticker or number in an example in skills or docs is a format placeholder; keep examples clearly labeled as such. Never write anything that reads as a recommendation to trade a specific instrument.
+Defaults in `.env.example` and strategy skills are risk limits chosen to be conservative and consistent with each other, so the repo works without edits. They are not recommendations. No ticker is ever a default setting. The one exception is an agent profile: the instruments an agent was built and tested on are part of that agent, stated with the evidence, not a recommendation. Any ticker or number in an example in skills or docs is a format placeholder; keep examples clearly labeled as such. Never write anything that reads as a recommendation to trade a specific instrument.
 
 ## Conventions for contributors
 
@@ -39,7 +40,7 @@ Defaults in `.env.example` and strategy skills are risk limits chosen to be cons
 - Hook changes must pass `node tests/hooks.test.js`, agent or skill changes must pass `node tests/skills.test.js`, and replay changes must pass `node tests/replay.test.js`, before commit. A normal `claude` session in the repo can edit hooks freely. Only sessions running a trading agent are blocked by the file guard.
 - A change to an index strategy's entry or exit rules changes `tools/replay/strategies.js` in the same commit. It must pass the checks in strategy-replay, with the results in `docs/research/`.
 - Every new trading agent must include the same `hooks` frontmatter block as `day-trader.md` so the file guard applies to it, and preload `trading-terms` first, then `trading-preflight`, `order-execution`, `trade-management`, `position-sizing`, and `trade-journal`. An agent without the hooks block can rewrite its own limits.
-- Settings: every user-tunable value goes in `.env`, with its default in `lib.js` and its line in `.env.example`. Never add a second settings file or repeat a setting in markdown, so nothing can disagree. Skills and agents refer to settings by key name.
+- Settings: `.env` holds money limits and switches. How an agent built for one set of instruments trades (universe, asset class, entry window, strategies, cadence) goes in its profile in `AGENT_PROFILES` in `lib.js`, with tests. The hooks apply the profile in place of those `.env` keys, keyed by `agent_type`, so editing `.env` cannot change that agent's behavior. Numbers that belong to a rule stay in the skill that states the rule. Every other user-tunable value goes in `.env`, with its default in `lib.js` and its line in `.env.example`. Never add a second settings file or repeat a setting in markdown, so nothing can disagree. Skills and agents refer to settings by key name.
 - Strategy skills list the asset classes they support and the rules for each. Agents choose the first class in `DEEPTRADE_ALLOWED_ASSET_CLASSES` that both the strategy and the account support.
 - Never commit `.env`, `journal/`, or `.claude/settings.local.json`. `.env` holds API keys, and trading agents are blocked from reading it.
 - Optional data source: add one `.mcp.json` entry that runs `optional-mcp.js <ENV_KEY>[:<SERVER_VAR>] <command...>` (`SERVER_VAR` maps a readable `.env` name to the variable the server expects), the key and an optional plan setting in `.env.example`, and one entry in `OPTIONAL_SOURCES` in `lib.js`. Never put a key in `.mcp.json` or on a command line. Pin the package version. List the server in each trading agent's `mcpServers`; it is always declared, so this is safe without a key. Agents must work without any optional source.
@@ -52,8 +53,8 @@ Defaults in `.env.example` and strategy skills are risk limits chosen to be cons
 ```bash
 claude                      # normal session in the repo
 claude --agent day-trader   # launch the Day Trader for a session
-claude --agent index-0dte-trader  # index ETFs and same-day options; needs DEEPTRADE_ALLOWED_SYMBOLS
-# Team mode: DEEPTRADE_TEAM_SIZE=2 and DEEPTRADE_EXPOSURE_GUARD=true; the main session starts its partner
+claude --agent index-0dte-trader  # SPY/QQQ same-day options; built-in profile, start it any time
+# Team mode is parked: index-0dte-trader's profile sets DEEPTRADE_TEAM_SIZE=1, and no other agent uses team-play
 /mcp                        # connect or reconnect Robinhood
 ```
 

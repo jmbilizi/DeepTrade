@@ -20,7 +20,7 @@ This is a rule set with a replay test, not a proven edge. See `docs/research/rep
 
 ## Applies to
 
-- The symbols in `ALLOWED_SYMBOLS`. If it is unset, do not run this strategy. Tell the user it needs an explicit list.
+- The symbols in `ALLOWED_SYMBOLS` from the session context. An agent profile sets them. If none are given, do not run this strategy.
 - Symbols with a same-day expiration today. Confirm it with `get_option_chains`.
 
 ## Data

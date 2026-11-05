@@ -127,6 +127,19 @@ for (const f of fs.readdirSync(AGENTS).filter((x) => x.endsWith(".md")).map((x) 
   check(`${rel(f)}: every preloaded skill exists`, !missing.length, `missing: ${missing.join(", ")}`);
 }
 
+// ---- agent profiles match their agents ----
+const { AGENT_PROFILES } = require(path.join(ROOT, ".claude", "hooks", "lib.js"));
+for (const [name, prof] of Object.entries(AGENT_PROFILES)) {
+  const f = path.join(AGENTS, `${name}.md`);
+  check(`profile ${name} has an agent file`, fs.existsSync(f));
+  if (!fs.existsSync(f)) continue;
+  const fm = (fs.readFileSync(f, "utf8").match(/^---\n([\s\S]*?)\n---/) || [])[1] || "";
+  const pre = fm.split("\n").map((l) => (l.match(/^\s*-\s*([\w-]+)/) || [])[1]).filter(Boolean);
+  const strategies = String(prof.settings.DEEPTRADE_STRATEGIES || "").split(",").filter(Boolean);
+  const missing = strategies.filter((x) => !pre.includes(x) || !fs.existsSync(path.join(SKILLS, x, "SKILL.md")));
+  check(`profile ${name}: its strategies exist and the agent preloads them`, strategies.length && !missing.length, `missing: ${missing.join(", ")}`);
+}
+
 // ---- strategies named in .env.example exist ----
 const shipped = (fs.readFileSync(path.join(ROOT, ".env.example"), "utf8").match(/^# Shipped:[\s\S]*?(?=^DEEPTRADE_STRATEGIES=)/m) || [""])[0];
 const named = [...new Set(shipped.match(/\b(?:index|opening)-[a-z-]+[a-z]\b/g) || [])];

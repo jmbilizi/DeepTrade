@@ -91,7 +91,7 @@ Without a key, the server still starts but offers no tools, so nothing errors. C
 | `DEEPTRADE_MAX_ORDER_USD`                    | Estimated order value exceeds this. Empty by default. Alone, it is the cap while buying power covers it, otherwise 10% of equity.             |
 | `DEEPTRADE_MAX_ORDER_PCT`                    | Estimated order value exceeds this percent of equity. Empty by default, which means 10%. With both set, the lower cap wins.                   |
 | `DEEPTRADE_MAX_ORDERS_PER_DAY`               | This many opening orders were already submitted today, market time.                                                                           |
-| `DEEPTRADE_ALLOWED_SYMBOLS`                  | The symbol is not on this list. Options match by underlying, crypto by base asset.                                                            |
+| `DEEPTRADE_ALLOWED_SYMBOLS`                  | The symbol is not on this list. Options match by underlying, crypto by base asset. Agents with a profile (index-0dte-trader) use their own list. |
 | `DEEPTRADE_BLOCKED_SYMBOLS`                  | The symbol is on this list.                                                                                                                   |
 | `DEEPTRADE_ALLOWED_ASSET_CLASSES`            | The order looks like a class not listed, out of `equity`, `option`, `crypto`.                                                                 |
 | `DEEPTRADE_NO_NEW_ENTRIES_BEFORE` / `_AFTER` | Current market time is outside the window, `HH:MM`.                                                                                           |
@@ -112,7 +112,7 @@ The per-order cap needs your equity and buying power. A hook records them from R
 | Path                                     | What it is                                                                                            |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `.claude/agents/day-trader.md`           | The first agent. Intraday entries and exits on a watchlist, flat by close.                            |
-| `.claude/agents/index-0dte-trader.md`    | Index ETFs, mostly same-day options, at half-hour check times. Flat before the broker's sellout.      |
+| `.claude/agents/index-0dte-trader.md`    | SPY/QQQ same-day options, morning scalps. Built-in profile: `.env` sets only its money limits.        |
 | `.claude/skills/trading-preflight/`      | Shared pre-session checks: settings, broker connection, account state, what the account can trade.    |
 | `.claude/skills/order-execution/`        | Shared rules for sending, confirming, and managing orders safely.                                     |
 | `.claude/skills/opening-range-breakout/` | The first strategy. Rules, filters, stop and target logic, data it needs.                             |

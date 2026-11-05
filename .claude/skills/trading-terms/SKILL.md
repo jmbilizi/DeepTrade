@@ -6,7 +6,7 @@ user-invocable: false
 
 # Trading terms
 
-Each term has one meaning. Other skills use these names and no synonyms. A setting written as `RISK_PER_TRADE_PCT` means `DEEPTRADE_RISK_PER_TRADE_PCT` from the session context.
+Each term has one meaning. Other skills use these names and no synonyms. A setting written as `RISK_PER_TRADE_PCT` means `DEEPTRADE_RISK_PER_TRADE_PCT` from the session context. The session context gives the value that applies, from `.env` or the agent profile.
 
 ## Positions and prices
 
@@ -49,6 +49,7 @@ Each term has one meaning. Other skills use these names and no synonyms. A setti
 | strategy check | A time when a strategy tests its entry rules: :00 and :30 for index-intraday-momentum, each completed 5-minute bar for index-trend-scalp and index-level-scalp. |
 | position check | A check of an open position, every `MANAGE_EVERY_MIN` minutes. |
 | entry start, entry cutoff | The first and last time a strategy may enter today. Inside the gate's `NO_NEW_ENTRIES_BEFORE` to `NO_NEW_ENTRIES_AFTER` window. |
+| agent profile | Settings built into an agent, in `AGENT_PROFILES` in the hooks. They replace the same `.env` keys. The session context marks them "(agent profile)". |
 | sellout | A same-day contract's `sellout_datetime` from the broker. The broker closes the position then. |
 | effective flat time | The earlier of `FLAT_BY` and 10 minutes before the earliest sellout of an open contract. On an early-close day, `FLAT_BY` moves earlier by as much as the close does. |
 

@@ -429,6 +429,48 @@ check("session-start emits context with opening order count", decision(ss) === "
   check("calendar: session start reports a holiday", /closed today, 2026-11-26, for Thanksgiving Day/.test((ssHol.out && ssHol.out.hookSpecificOutput.additionalContext) || ""));
   const ssWeek = runAt(atTime("2026-11-23", "09:00", "Monday"), "session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
   check("calendar: session start lists closures in the coming week", /Coming up: 2026-11-26 closed \(Thanksgiving Day\); 2026-11-27 closes early at 13:00/.test((ssWeek.out && ssWeek.out.hookSpecificOutput.additionalContext) || ""));
+  // ---- agent profile: index-0dte-trader owns its symbols, class, and session ----
+  {
+    for (const sk of ["index-level-scalp", "index-trend-scalp"]) { fs.mkdirSync(path.join(ROOT, ".claude", "skills", sk), { recursive: true }); fs.writeFileSync(path.join(ROOT, ".claude", "skills", sk, "SKILL.md"), "# stub\n"); }
+    const profEnv = { DEEPTRADE_MAX_ORDER_USD: 500, DEEPTRADE_ALLOWED_SYMBOLS: "IWM", DEEPTRADE_ALLOWED_ASSET_CLASSES: "equity", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "10:00", DEEPTRADE_STRATEGIES: "no-such-strategy" };
+    setEnv(profEnv); clearJournal();
+    const fresh = () => setState({ equity: 4000, buying_power: 4000, cash: 4000, updated_at: new Date().toISOString() });
+    fresh();
+    j("get_option_instruments", { chain_symbol: "SPY" }, { data: { instruments: [{ id: "id-spy", chain_symbol: "SPY" }, { id: "id-iwm", chain_symbol: "IWM" }] } });
+    const legOpen = (id) => ({ account_number: "1", legs: [{ option_id: id, side: "buy", position_effect: "open", ratio_quantity: 1 }], quantity: "1", price: "1.00", type: "limit" });
+    const idx = (clock, ti, agent = "index-0dte-trader", tool = "place_option_order") => { fresh(); return runAt(clock, "risk-gate.js", { tool_name: `mcp__robinhood-trading__${tool}`, tool_input: ti, agent_type: agent, cwd: ROOT }); };
+    const t1100 = atTime("2026-11-04", "11:00", "Wednesday");
+    expect("profile: SPY option passes though .env sets other symbols, class, and an earlier cutoff", idx(t1100, legOpen("id-spy")), "context");
+    expect("profile: a symbol outside the profile is denied", idx(t1100, legOpen("id-iwm")), "deny", "the index-0dte-trader profile (allowed_symbols=SPY,QQQ)");
+    expect("profile: shares are denied (option only)", idx(t1100, { symbol: "SPY", side: "buy", quantity: 1, limit_price: 100, type: "limit" }, "index-0dte-trader", "place_equity_order"), "deny", "allowed_asset_classes=option");
+    expect("profile: no entry before the 09:30 open", idx(atTime("2026-11-04", "09:20", "Wednesday"), legOpen("id-spy")), "deny", "no_new_entries_before=09:30");
+    expect("profile: no entry after the 15:45 sellout", idx(atTime("2026-11-04", "15:50", "Wednesday"), legOpen("id-spy")), "deny", "no_new_entries_after=15:45");
+    expect("profile: early close moves the session cutoff (12:50 > 12:45)", idx(atTime("2026-11-27", "12:50", "Friday"), legOpen("id-spy")), "deny", "moved 180 minutes earlier");
+    expect("profile: exits pass outside the session", idx(atTime("2026-11-04", "15:55", "Wednesday"), { account_number: "1", legs: [{ option_id: "id-spy", side: "sell", position_effect: "close", ratio_quantity: 1 }], quantity: "1", price: "1.00", type: "limit" }), "context", "position-reducing");
+    expect("no profile: another agent still gets the .env cutoff", idx(t1100, legOpen("id-spy"), "day-trader"), "deny", "DEEPTRADE_NO_NEW_ENTRIES_AFTER=10:00");
+    expect("no profile: an unknown agent type gets .env", idx(t1100, legOpen("id-spy"), "toString"), "deny", "DEEPTRADE_NO_NEW_ENTRIES_AFTER=10:00");
+    // Mid-session edits: keys the profile owns change nothing; money limits still re-brief.
+    setEnv(profEnv); clearJournal();
+    j("get_option_instruments", { chain_symbol: "SPY" }, { data: { instruments: [{ id: "id-spy", chain_symbol: "SPY" }] } });
+    idx(t1100, legOpen("id-spy"));
+    setEnv({ ...profEnv, DEEPTRADE_ALLOWED_SYMBOLS: "XYZ", DEEPTRADE_NO_NEW_ENTRIES_AFTER: "09:31", DEEPTRADE_MAX_POSITIONS: "5" }, { keepSnapshot: true });
+    expect("profile: editing keys the profile owns does not re-brief", idx(t1100, legOpen("id-spy")), "context");
+    setEnv({ ...profEnv, DEEPTRADE_MAX_ORDER_USD: 300 }, { keepSnapshot: true });
+    expect("profile: editing a money limit still re-briefs", idx(t1100, legOpen("id-spy")), "deny", "changed .env");
+    // Session start for the profiled agent.
+    setEnv(profEnv);
+    const ss = runAt(t1100, "session-start.js", { hook_event_name: "SessionStart", source: "startup", agent_type: "index-0dte-trader", cwd: ROOT });
+    const sc = (ss.out && ss.out.hookSpecificOutput.additionalContext) || "";
+    check("profile: session start reports the profile and marks its values", /Agent profile index-0dte-trader/.test(sc) && /allowed_symbols=SPY,QQQ \(agent profile\)/.test(sc) && /strategies=index-level-scalp,index-trend-scalp \(agent profile\)/.test(sc));
+    check("profile: session start lists the ignored .env keys", /ignored for this agent: .*DEEPTRADE_ALLOWED_SYMBOLS=IWM/.test(sc));
+    check("profile: keys the profile owns raise no settings problem", !/Settings problems/.test(sc));
+    check("profile: unused scan settings are left out", !/scan_min_price/.test(sc));
+    const ssPlain = runAt(t1100, "session-start.js", { hook_event_name: "SessionStart", source: "startup", cwd: ROOT });
+    check("no profile: session start still checks .env strategies", /no-such-strategy" in DEEPTRADE_STRATEGIES has no skill/.test((ssPlain.out && ssPlain.out.hookSpecificOutput.additionalContext) || ""));
+    check("snapshot: one briefing per agent profile", (() => { const j = JSON.parse(fs.readFileSync(path.join(ROOT, "journal", "settings-snapshot.json"), "utf8")); return j.byAgent && j.byAgent["*"] && j.byAgent["index-0dte-trader"] && j.byAgent["index-0dte-trader"].DEEPTRADE_ALLOWED_SYMBOLS === "SPY,QQQ"; })());
+    fs.writeFileSync(path.join(ROOT, "journal", "settings-snapshot.json"), JSON.stringify(LIB.settingsSnapshot(LIB.loadEnv(path.join(ROOT, ".env")))));
+    expect("snapshot: an old flat snapshot still works for agents without a profile", idx(t1100, legOpen("id-spy"), "day-trader"), "deny", "DEEPTRADE_NO_NEW_ENTRIES_AFTER=10:00");
+  }
   for (const f of fs.readdirSync(ROOT)) if (f.startsWith("clock-")) fs.unlinkSync(path.join(ROOT, f));
 }
 

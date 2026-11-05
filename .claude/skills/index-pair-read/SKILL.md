@@ -1,6 +1,6 @@
 ---
 name: index-pair-read
-description: Reads two or more highly correlated broad index ETFs from DEEPTRADE_ALLOWED_SYMBOLS together. Scores relative strength on a volatility-scaled basis, decides whether the indexes confirm or diverge, picks the one instrument to put the trade in, and sets the size tier. Load when a strategy trades index ETFs and more than one is allowed.
+description: Reads two or more highly correlated broad index ETFs from ALLOWED_SYMBOLS together. Scores relative strength on a volatility-scaled basis, decides whether the indexes confirm or diverge, picks the one instrument to put the trade in, and sets the size tier. Load when a strategy trades index ETFs and more than one is allowed.
 user-invocable: false
 ---
 

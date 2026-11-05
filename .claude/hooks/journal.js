@@ -16,7 +16,8 @@ function main() {
   const toolName = String(input.tool_name || "");
   const dir = L.projectDir(input);
   const jdir = L.path.join(dir, "journal");
-  const env = L.loadEnv(L.path.join(dir, ".env"));
+  const rawEnv = L.loadEnv(L.path.join(dir, ".env"));
+  const env = L.effectiveEnv(rawEnv, input.agent_type);
   const tz = env.DEEPTRADE_TIMEZONE || L.DEFAULT_TZ;
 
   try {

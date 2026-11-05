@@ -144,6 +144,58 @@ const PLAN_DEFAULTS = {
   DEEPTRADE_SCAN_MIN_AVG_VOLUME: "2000000",
 };
 
+// ---------- agent profiles ----------
+// An agent with a profile owns how it trades. Its values replace the matching
+// .env keys, so editing those keys cannot change the agent mid-session, and
+// the user's .env holds only money limits and switches for it. Hooks learn the
+// agent from agent_type in every payload (claude --agent <name>, or a subagent).
+// Change a profile here, with tests; never in .env.
+const AGENT_PROFILES = {
+  "index-0dte-trader": {
+    summary: "SPY and QQQ same-day options. The universe is the agent's own, not a recommendation: its strategies were written and replayed on these two only (docs/research/replay-2026-11.md).",
+    settings: {
+      DEEPTRADE_ALLOWED_SYMBOLS: "SPY,QQQ",
+      DEEPTRADE_ALLOWED_ASSET_CLASSES: "option",
+      // The market session for same-day options: the open to the latest sellout
+      // (15:45 on a regular day). The gate moves the cutoff for early closes.
+      // Each strategy's own window is narrower and lives in its skill.
+      DEEPTRADE_NO_NEW_ENTRIES_BEFORE: "09:30",
+      DEEPTRADE_NO_NEW_ENTRIES_AFTER: "15:45",
+      DEEPTRADE_FLAT_BY: "15:50",
+      DEEPTRADE_TIMEZONE: DEFAULT_TZ,
+      DEEPTRADE_ALLOW_SHORTS: "false",
+      DEEPTRADE_GATE_SELLS: "false",
+      DEEPTRADE_STRATEGIES: "index-level-scalp,index-trend-scalp",
+      DEEPTRADE_MAX_POSITIONS: "1",
+      DEEPTRADE_CHECK_EVERY_MIN: "5",
+      DEEPTRADE_MANAGE_EVERY_MIN: "1",
+      DEEPTRADE_TEAM_SIZE: "1",
+      DEEPTRADE_FRACTIONAL_SHARES: "false",
+    },
+    // Plan keys that mean nothing to this agent; the session report leaves them out.
+    unused: ["DEEPTRADE_SCAN_MIN_PRICE", "DEEPTRADE_SCAN_MIN_AVG_VOLUME", "DEEPTRADE_FRACTIONAL_SHARES"],
+  },
+};
+
+function agentProfile(agentType) {
+  return Object.prototype.hasOwnProperty.call(AGENT_PROFILES, String(agentType || "")) ? AGENT_PROFILES[agentType] : null;
+}
+
+// The settings that apply to this agent: .env with the profile's keys replaced.
+// Returns a plain object like loadEnv's; __PROFILE names the profile, if any.
+function effectiveEnv(env, agentType) {
+  const prof = agentProfile(agentType);
+  if (!prof) return env;
+  return { ...env, ...prof.settings, __PROFILE: String(agentType) };
+}
+
+// .env keys the user set that the profile overrides, with the value set.
+function overriddenKeys(env, agentType) {
+  const prof = agentProfile(agentType);
+  if (!prof) return [];
+  return Object.keys(prof.settings).filter((k) => env[k] !== undefined && String(env[k]).trim() !== "" && String(env[k]).trim() !== prof.settings[k]);
+}
+
 const ASSET_CLASSES = ["equity", "option", "crypto"];
 
 // US equity market calendar, from NYSE Group's published holiday and early
@@ -195,6 +247,31 @@ const OPTIONAL_SOURCES = [
 // Settings the agent was told about at session start, so a mid-session .env
 // edit can be surfaced before the next entry. API keys are never included.
 const SETTINGS_SNAPSHOT_FILE = "settings-snapshot.json";
+
+// The snapshot file keeps one briefing per agent profile ("*" for agents
+// without one), so two agents with different effective settings do not see
+// each other's values as .env edits. An old flat snapshot counts as "*".
+const snapKey = (env) => (env && env.__PROFILE) || "*";
+function readSnapshot(file, env) {
+  try {
+    const j = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (j && j.byAgent && typeof j.byAgent === "object") return j.byAgent[snapKey(env)] || null;
+    return snapKey(env) === "*" && j && typeof j === "object" ? j : null;
+  } catch {
+    return null;
+  }
+}
+function writeSnapshot(file, env, snap) {
+  let byAgent = {};
+  try {
+    const j = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (j && j.byAgent && typeof j.byAgent === "object") byAgent = j.byAgent;
+  } catch {
+    /* none yet */
+  }
+  byAgent[snapKey(env)] = snap;
+  fs.writeFileSync(file, JSON.stringify({ byAgent }), "utf8");
+}
 
 function settingsSnapshot(env) {
   const out = {};
@@ -978,6 +1055,8 @@ module.exports = {
   STATE_MAX_AGE_MIN,
   ACCOUNT_STATE_FILE,
   SETTINGS_SNAPSHOT_FILE,
+  readSnapshot,
+  writeSnapshot,
   settingsSnapshot,
   settingsChanges,
   lastOrderMs,
@@ -998,6 +1077,10 @@ module.exports = {
   DEFAULT_TZ,
   GUARDRAIL_KEYS,
   PLAN_DEFAULTS,
+  AGENT_PROFILES,
+  agentProfile,
+  effectiveEnv,
+  overriddenKeys,
   DEFAULT_MAX_ORDER_PCT,
   orderCap,
   describeOrderCap,
