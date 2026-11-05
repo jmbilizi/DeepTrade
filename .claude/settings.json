@@ -2,6 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(sleep *)",
+      "Bash(node tools/clock.js)",
+      "Bash(node tools/clock.js *)",
       "Edit(journal/**)",
       "WebSearch",
       "mcp__robinhood-trading__place_option_order",

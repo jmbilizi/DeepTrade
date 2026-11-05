@@ -56,6 +56,11 @@ function main() {
   // Opening order from here on.
   if (halt) return deny("DEEPTRADE_HALT is true in .env. New entries are blocked. Exits and cancels still work. Ask the user to set it to false to resume.");
 
+  // Only a trading agent with a profile may open positions; a parked one may not.
+  const prof = L.agentProfile(input.agent_type);
+  if (!prof) return deny(`This session has no agent profile${input.agent_type ? ` (agent_type ${input.agent_type})` : ""}. Only a trading agent with a profile in AGENT_PROFILES in .claude/hooks/lib.js may open positions, for example claude --agent index-0dte-trader. Exits and cancels still work.`);
+  if (prof.parked) return deny(`${input.agent_type} is parked: ${prof.parked} It may do research but not open positions. Exits and cancels still work.`);
+
   // Settings edited in .env since the agent was briefed: refuse this entry once
   // and list the new values, so the agent re-plans with them before retrying.
   const snapFile = L.path.join(dir, "journal", L.SETTINGS_SNAPSHOT_FILE);

@@ -140,11 +140,13 @@ for (const [name, prof] of Object.entries(AGENT_PROFILES)) {
   check(`profile ${name}: its strategies exist and the agent preloads them`, strategies.length && !missing.length, `missing: ${missing.join(", ")}`);
 }
 
-// ---- strategies named in .env.example exist ----
-const shipped = (fs.readFileSync(path.join(ROOT, ".env.example"), "utf8").match(/^# Shipped:[\s\S]*?(?=^DEEPTRADE_STRATEGIES=)/m) || [""])[0];
-const named = [...new Set(shipped.match(/\b(?:index|opening)-[a-z-]+[a-z]\b/g) || [])];
-check(".env.example names shipped strategies", named.length >= 4, `found: ${named.join(", ")}`);
-for (const s of named) check(`.env.example strategy ${s} has a skill`, fs.existsSync(path.join(SKILLS, s, "SKILL.md")));
+// ---- .env.example holds only money limits and switches ----
+{
+  const { PROFILE_KEYS } = require(path.join(ROOT, ".claude", "hooks", "lib.js"));
+  const keys = (fs.readFileSync(path.join(ROOT, ".env.example"), "utf8").match(/^[A-Z_]+(?==)/gm) || []);
+  const behavior = keys.filter((k) => PROFILE_KEYS.includes(k));
+  check(".env.example sets no behavior key (those live in agent profiles)", !behavior.length, `found: ${behavior.join(", ")}`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;

@@ -8,6 +8,17 @@ user-invocable: false
 
 A time-boxed, rule-based intraday setup. The opening range is the high and low of the first 15 minutes of regular trading, 09:30 to 09:45 America/New_York. A breakout is a close outside that range with confirmation. The agent trades the first valid break only.
 
+## Evidence
+
+A replay of 20 sessions (2026-10-08 to 2026-11-04) found no edge for a small account. See `docs/research/replay-orb-2026-11.md`.
+
+- Ten scanned stocks with weekly options: 8 trades, none won, −0.77 R on average.
+- The same stocks in shares: −0.07 R on average, worse than random entries.
+- SPY and QQQ: no trades. The ranges were too small, or no break passed the volume filter.
+- Spreads on the cheap weekly options were 4% to 37% of the price.
+
+Do not trade it live until a new replay passes the strategy-replay checks.
+
 ## Why this strategy first
 
 It is simple to state, easy to verify after the fact, and limited to a narrow window so the agent is not hunting all day. It is also well known, which means it works less often than it did and demands strict filters. Expect many days with no trade.
