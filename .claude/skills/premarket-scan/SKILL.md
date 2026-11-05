@@ -15,7 +15,7 @@ Goal: a short, defensible list of symbols worth watching today, plus the context
 3. **Seeds.** If `DEEPTRADE_ALLOWED_SYMBOLS` is set, those are the only candidates; skip step 4. Otherwise the candidates come from step 4. For each candidate, fetch pre-market price, change from prior close, and pre-market volume if available. Note prior day high, low, and close.
 4. **Movers.** If the broker exposes a movers or top-gainers tool, pull it. Otherwise a web search for "pre-market gainers" fills the gap. Keep only symbols at or above `DEEPTRADE_SCAN_MIN_PRICE` and `DEEPTRADE_SCAN_MIN_AVG_VOLUME`, and not in `DEEPTRADE_BLOCKED_SYMBOLS`.
 5. **News.** For every candidate that survives, one search for news in the last 24 hours. Earnings, guidance, upgrades, FDA, legal. A symbol with a scheduled event during the session is a skip unless the strategy handles it.
-6. **Levels.** For each finalist: prior day high and low, pre-market high and low, and any obvious round number nearby. These are the levels the strategies will reference.
+6. **Levels.** For each finalist: prior day high and low, pre-market high and low, and any obvious round number nearby. These are the levels the strategies will reference. For index ETFs, use the key-levels map instead.
 7. **Rank and cut.** Keep 3 to 5. Prefer liquidity and a clear reason. Drop anything you cannot explain in one line.
 
 ## Output format

@@ -55,6 +55,17 @@ units     = min(units, cash / unit_cost)
 - `DEEPTRADE_FRACTIONAL_SHARES` false: round shares down to whole. Robinhood accepts fractional shares only on market orders in regular hours, sent with `dollar_amount` = shares × price. For a limit order, round down to whole shares.
 - A strategy may ask for less (for example, index-pair-read's half-size tier). Never more than the cap allows.
 
+## Choosing the strike
+
+For options, pick the strike closest to the money where one contract fits the per-order cap. The signal is the direction. The contract only expresses it.
+
+1. Start at the strike nearest the last price. For calls, use the first strike at or above it. For puts, use the first at or below it.
+2. One contract costs the ask × 100. Take it if it fits the cap and the cash, and passes the strategy's liquidity and spread rules.
+3. If not, step one strike further out of the money, in the trade's direction. Repeat step 2.
+4. Stop stepping below the strategy's delta floor. If no strike passes, skip the signal and journal "no affordable contract".
+
+Never step into the money to find liquidity. Reason: in-the-money contracts cost more, not less. Record on the trade card the strikes you passed over and why.
+
 ## What it can lose
 
 ```text

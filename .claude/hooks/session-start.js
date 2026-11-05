@@ -10,7 +10,8 @@ const L = require("./lib");
 function main() {
   const input = L.readStdinJson() || {};
   const dir = L.projectDir(input);
-  const env = L.loadEnv(L.path.join(dir, ".env"));
+  const rawEnv = L.loadEnv(L.path.join(dir, ".env"));
+  const env = L.effectiveEnv(rawEnv, input.agent_type);
   const tz = env.DEEPTRADE_TIMEZONE || L.DEFAULT_TZ;
   const now = L.localParts(tz);
   const lines = [];
@@ -18,7 +19,7 @@ function main() {
   lines.push(`DeepTrade session context. Local market time: ${now.text} (${tz}).`);
   try {
     L.fs.mkdirSync(L.path.join(dir, "journal"), { recursive: true });
-    L.fs.writeFileSync(L.path.join(dir, "journal", L.SETTINGS_SNAPSHOT_FILE), JSON.stringify(L.settingsSnapshot(env)), "utf8");
+    L.writeSnapshot(L.path.join(dir, "journal", L.SETTINGS_SNAPSHOT_FILE), env, L.settingsSnapshot(env));
   } catch {
     /* the gate takes a snapshot itself if this is missing */
   }
@@ -28,7 +29,8 @@ function main() {
     lines.push("No .env file found, so no settings or risk gate limits are set. A trading agent must ask the user to run `cp .env.example .env` and review it before trading.");
   } else {
     const g = [];
-    const show = (label, key) => g.push(`${label}=${env[key] === undefined || env[key] === "" ? "unset" : env[key]}`);
+    const fromProfile = (key) => Boolean(env.__PROFILE && L.agentProfile(env.__PROFILE).settings[key] !== undefined);
+    const show = (label, key) => g.push(`${label}=${env[key] === undefined || env[key] === "" ? "unset" : env[key]}${fromProfile(key) ? " (agent profile)" : ""}`);
     show("halt", "DEEPTRADE_HALT");
     show("halt_all", "DEEPTRADE_HALT_ALL");
     show("max_order_usd", "DEEPTRADE_MAX_ORDER_USD");
@@ -42,11 +44,20 @@ function main() {
     g.push(`allow_shorts=${L.gateSells(env)}`);
     g.push(`exposure_guard=${L.truthy(env.DEEPTRADE_EXPOSURE_GUARD)}`);
     if (env.DEEPTRADE_REQUIRE_KNOWN_VALUE) show("require_known_value", "DEEPTRADE_REQUIRE_KNOWN_VALUE");
-    lines.push(`Guardrails from .env, enforced by the risk gate: ${g.join(", ")}.`);
+    lines.push(`Guardrails${env.__PROFILE ? "" : " from .env"}, enforced by the risk gate: ${g.join(", ")}.`);
 
     const plan = L.planSettings(env);
-    const p = Object.entries(plan).map(([k, v]) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${v.value}${v.isDefault ? " (default)" : ""}`);
-    lines.push(`Trading plan from .env, followed by the agent: ${p.join(", ")}.`);
+    const prof = L.agentProfile(env.__PROFILE);
+    const owned = (k) => Boolean(prof && prof.settings[k] !== undefined);
+    const p = Object.entries(plan)
+      .filter(([k]) => !(prof && (prof.unused || []).includes(k)))
+      .map(([k, v]) => `${k.replace(/^DEEPTRADE_/, "").toLowerCase()}=${v.value}${owned(k) ? " (agent profile)" : v.isDefault ? " (default)" : ""}`);
+    lines.push(`Trading plan${prof ? "" : " from .env"}, followed by the agent: ${p.join(", ")}.`);
+    if (prof) {
+      lines.push(`Agent profile ${env.__PROFILE}, built into .claude/hooks/lib.js: ${prof.summary} The risk gate enforces its symbols, asset class, and entry window (the market session for same-day options); .env cannot change them. From .env this agent uses only money limits and switches: the per-order cap, max orders per day, the loss ceiling, the daily loss limit, the daily profit target, halt, blocked symbols, and the exposure guard.`);
+      const ignored = L.overriddenKeys(rawEnv, env.__PROFILE);
+      if (ignored.length) lines.push(`.env sets keys this agent's profile overrides, so they are ignored for this agent: ${ignored.map((k) => `${k}=${String(rawEnv[k]).trim()}`).join(", ")}. Mention it to the user once; it is not a settings problem.`);
+    }
     lines.push("This context is the complete trading plan. Do not read .env directly; it may hold API keys.");
     const src = L.OPTIONAL_SOURCES.map((s) => {
       const on = Boolean((env[s.key] || "").trim() || (process.env[s.key] || "").trim());
@@ -108,6 +119,8 @@ function checkSettings(dir, env, plan) {
     const n = L.num(plan[k].value);
     if (n === null || n <= 0) out.push(`${k}=${plan[k].value} must be a positive number.`);
   }
+  const target = L.num(plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value);
+  if (target === null || target < 0) out.push(`DEEPTRADE_DAILY_PROFIT_TARGET_PCT=${plan.DEEPTRADE_DAILY_PROFIT_TARGET_PCT.value} must be 0 (no target) or a positive number.`);
   // RISK_PER_TRADE_PCT is the most one trade may lose, in percent of what the
   // trade cost. It used to mean percent of equity, where values like 0.5 to 5
   // were normal; as a percent of the trade they put the stop inside the noise.

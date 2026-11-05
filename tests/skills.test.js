@@ -100,6 +100,10 @@ const OWNED = [
   [/closes beyond the last 5-minute swing point/i, "trade-management"],
   [/both max_order_usd|cap = min\(max_order_usd/i, "position-sizing"],
   [/earlier of `FLAT_BY` and 10 minutes before|sellout(_datetime)? − 10 minutes/i, "trading-terms"],
+  [/Rest a bank order for every contract/i, "trade-management"],
+  [/Never step into the money to find liquidity/i, "position-sizing"],
+  [/Highest high of the first three 5-minute bars/i, "key-levels"],
+  [/A change passes only when all of these are true/i, "strategy-replay"],
 ];
 for (const [re, owner] of OWNED) {
   const hits = files.filter((f) => re.test(fs.readFileSync(f, "utf8"))).map(rel);
@@ -114,6 +118,33 @@ for (const f of fs.readdirSync(AGENTS).filter((x) => x.endsWith(".md")).map((x) 
   const first = (fm.match(/skills:\n\s*-\s*([\w-]+)/) || [])[1];
   check(`${rel(f)}: preloads trading-terms first`, first === "trading-terms", `first skill is ${first || "none"}`);
 }
+
+// ---- every preloaded skill exists ----
+for (const f of fs.readdirSync(AGENTS).filter((x) => x.endsWith(".md")).map((x) => path.join(AGENTS, x))) {
+  const fm = (fs.readFileSync(f, "utf8").match(/^---\n([\s\S]*?)\n---/) || [])[1] || "";
+  const list = ((fm.match(/skills:\n((?:\s*-\s*[\w-]+\n?)+)/) || [])[1] || "").split("\n").map((l) => (l.match(/^\s*-\s*([\w-]+)/) || [])[1]).filter(Boolean);
+  const missing = list.filter((s) => !fs.existsSync(path.join(SKILLS, s, "SKILL.md")));
+  check(`${rel(f)}: every preloaded skill exists`, !missing.length, `missing: ${missing.join(", ")}`);
+}
+
+// ---- agent profiles match their agents ----
+const { AGENT_PROFILES } = require(path.join(ROOT, ".claude", "hooks", "lib.js"));
+for (const [name, prof] of Object.entries(AGENT_PROFILES)) {
+  const f = path.join(AGENTS, `${name}.md`);
+  check(`profile ${name} has an agent file`, fs.existsSync(f));
+  if (!fs.existsSync(f)) continue;
+  const fm = (fs.readFileSync(f, "utf8").match(/^---\n([\s\S]*?)\n---/) || [])[1] || "";
+  const pre = fm.split("\n").map((l) => (l.match(/^\s*-\s*([\w-]+)/) || [])[1]).filter(Boolean);
+  const strategies = String(prof.settings.DEEPTRADE_STRATEGIES || "").split(",").filter(Boolean);
+  const missing = strategies.filter((x) => !pre.includes(x) || !fs.existsSync(path.join(SKILLS, x, "SKILL.md")));
+  check(`profile ${name}: its strategies exist and the agent preloads them`, strategies.length && !missing.length, `missing: ${missing.join(", ")}`);
+}
+
+// ---- strategies named in .env.example exist ----
+const shipped = (fs.readFileSync(path.join(ROOT, ".env.example"), "utf8").match(/^# Shipped:[\s\S]*?(?=^DEEPTRADE_STRATEGIES=)/m) || [""])[0];
+const named = [...new Set(shipped.match(/\b(?:index|opening)-[a-z-]+[a-z]\b/g) || [])];
+check(".env.example names shipped strategies", named.length >= 4, `found: ${named.join(", ")}`);
+for (const s of named) check(`.env.example strategy ${s} has a skill`, fs.existsSync(path.join(SKILLS, s, "SKILL.md")));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exitCode = fail ? 1 : 0;
