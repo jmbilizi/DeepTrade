@@ -91,6 +91,25 @@ function levelCase(mutate) {
 check("index-level-scalp: no signal before 3 bars", STRATEGIES["index-level-scalp"].signal({ today: session("2026-11-03", flat(3, 100)), prevDay: null, i: 2 }) === null);
 check("index-level-scalp: window 09:50 to 11:30", STRATEGIES["index-level-scalp"].window.from === "09:50" && STRATEGIES["index-level-scalp"].window.to === "11:30");
 
+// ---- index-trend-scalp setup M ----
+{
+  // A steady fall: trend state down, every bar far below VWAP (extension beyond -2 ATR), so A and B cannot fire.
+  const closes = Array.from({ length: 16 }, (_, i) => 100 - i * 0.8);
+  const prev = session("2026-11-02", flat(78, 100), { spread: 0.2 });
+  const today = session("2026-11-03", closes, { spread: 0.2 });
+  R.addIndicators({ "2026-11-02": prev, "2026-11-03": today });
+  const i = today.length - 1, b = today[i];
+  const ts = STRATEGIES["index-trend-scalp"];
+  const sig = ts.signal({ today, prevDay: prev, i });
+  check("setup M: test bars are a stretched downtrend", (b.c - b.vwap) / b.atr < -2 && b.e9 < b.e20 && b.st === -1, JSON.stringify({ ext: (b.c - b.vwap) / b.atr, st: b.st }));
+  check("setup M: bearish continuation beyond the extension limit", sig && sig.dir === -1 && sig.tag === "M", JSON.stringify(sig));
+  check("setup M: stop above the signal bar's high", sig && near(sig.stop, b.h + 0.1 * b.atr, 1e-9));
+  const witnessUp = today.map((x) => ({ ...x, c: x.vwap + 1 }));
+  check("setup M: no entry when the pair read disagrees", ts.signal({ today, prevDay: prev, i, witness: witnessUp }) === null);
+  const held = today.map((x, k) => (k === i ? { ...x, c: today[i - 1].l + 0.05 } : x));
+  check("setup M: the close must pass the previous bar's low", (ts.signal({ today: held, prevDay: prev, i }) || {}).tag !== "M");
+}
+
 // ---- simulate the bracket ----
 function minuteBars(path1) {
   return path1.map((px, i) => ({ m: 600 + i, o: i ? path1[i - 1] : px, h: Math.max(px, i ? path1[i - 1] : px) + 0.02, l: Math.min(px, i ? path1[i - 1] : px) - 0.02, c: px }));
