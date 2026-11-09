@@ -35,33 +35,37 @@ const STRATEGIES = {
       return null;
     },
   },
-  // .claude/skills/index-trend-scalp/SKILL.md (setups A and B with every filter)
+  // .claude/skills/index-trend-scalp/SKILL.md: setups A and B with every filter, then setup M
   "index-trend-scalp": {
     window: { from: "09:50", to: "11:30" },
     exits: BRACKET,
     signal({ today, i, witness }) {
       if (i < 3) return null;
       const b = today[i], p = today[i - 1];
-      if (chopFlag(today, i) || b.tr > 2.5 * b.atr) return null;
+      if (chopFlag(today, i)) return null;
+      const volShift = b.tr > 2.5 * b.atr;
       const ext = (b.c - b.vwap) / b.atr;
+      const prior3 = today.slice(i - 3, i);
       for (const dir of [1, -1]) {
-        if (dir * ext > 2) continue;
-        const prior3 = today.slice(i - 3, i);
-        const nearAnchor = prior3.some((x) => (dir === 1 ? x.l <= Math.max(x.e20, x.vwap) + 0.25 * b.atr : x.h >= Math.min(x.e20, x.vwap) - 0.25 * b.atr));
-        const noCross = today.slice(i - 3, i + 1).every((x) => (dir === 1 ? x.c >= x.vwap : x.c <= x.vwap));
-        const a = trendState(b) === dir && nearAnchor && noCross && (dir === 1 ? b.c > b.e9 && b.c > p.h : b.c < b.e9 && b.c < p.l);
-        const wrongSide = today.slice(Math.max(0, i - 6), i).filter((x) => (dir === 1 ? x.c < x.vwap : x.c > x.vwap)).length;
-        const bSetup = wrongSide >= 2 && (dir === 1 ? b.c > b.vwap && b.c > Math.max(...prior3.map((x) => x.h)) && b.e9 > b.e20 : b.c < b.vwap && b.c < Math.min(...prior3.map((x) => x.l)) && b.e9 < b.e20);
-        if (!a && !bSetup) continue;
-        const stop = dir === 1 ? b.l - 0.1 * b.atr : b.h + 0.1 * b.atr;
-        const dist = Math.abs(b.c - stop);
-        if (dist < 0.3 * b.atr || dist > 1.0 * b.atr) continue;
         if (witness) {
           const w = witness[i];
           const wt = trendState(w);
           if (dir === 1 ? w.c < w.vwap || wt === -1 : w.c > w.vwap || wt === 1) continue; // index-pair-read: disagrees
         }
-        return { dir, stop, tag: a ? "A" : "B" };
+        const stop = dir === 1 ? b.l - 0.1 * b.atr : b.h + 0.1 * b.atr;
+        const dist = Math.abs(b.c - stop);
+        if (dist < 0.3 * b.atr) continue;
+        const trendBar = trendState(b) === dir && (dir === 1 ? b.c > b.e9 && b.c > p.h : b.c < b.e9 && b.c < p.l);
+        // Setups A and B: no volatility shift, extension within 2.0 ATR, stop distance at most 1.0 ATR.
+        if (!volShift && dir * ext <= 2 && dist <= 1.0 * b.atr) {
+          const nearAnchor = prior3.some((x) => (dir === 1 ? x.l <= Math.max(x.e20, x.vwap) + 0.25 * b.atr : x.h >= Math.min(x.e20, x.vwap) - 0.25 * b.atr));
+          const noCross = today.slice(i - 3, i + 1).every((x) => (dir === 1 ? x.c >= x.vwap : x.c <= x.vwap));
+          if (trendBar && nearAnchor && noCross) return { dir, stop, tag: "A" };
+          const wrongSide = today.slice(Math.max(0, i - 6), i).filter((x) => (dir === 1 ? x.c < x.vwap : x.c > x.vwap)).length;
+          if (wrongSide >= 2 && (dir === 1 ? b.c > b.vwap && b.c > Math.max(...prior3.map((x) => x.h)) && b.e9 > b.e20 : b.c < b.vwap && b.c < Math.min(...prior3.map((x) => x.l)) && b.e9 < b.e20)) return { dir, stop, tag: "B" };
+        }
+        // Setup M, momentum continuation: the trend bar alone. No extension limit, no pullback, no stop-distance cap.
+        if (trendBar) return { dir, stop, tag: "M" };
       }
       return null;
     },

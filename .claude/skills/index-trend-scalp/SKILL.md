@@ -1,6 +1,6 @@
 ---
 name: index-trend-scalp
-description: Morning semi-scalping strategy for broad index ETFs, in same-day options or shares. Trades with the 5-minute trend on pullbacks that hold, flips on VWAP reclaims, and re-enters when the trend resumes. Checked on every completed 5-minute bar to 11:30. Load when a trading agent needs entry, stop, target, invalidation, re-entry, and flip rules for short index trend trades.
+description: Morning semi-scalping strategy for broad index ETFs, in same-day options or shares. Trades with the 5-minute trend on pullbacks that hold and on momentum bars of a running trend, flips on VWAP reclaims, and re-enters when the trend resumes. Checked on every completed 5-minute bar to 11:30. Load when a trading agent needs entry, stop, target, invalidation, re-entry, and flip rules for short index trend trades.
 user-invocable: false
 ---
 
@@ -12,7 +12,7 @@ Terms are defined in trading-terms. This strategy takes short trades with the in
 
 This is a rule set, not a proven edge. No published test covers these entry, re-entry, or flip rules. Retail buyers of same-day index options lose on average, mostly to spreads and fees. Each extra round trip pays another spread, so the filters require a clear trend. Review the results after every 10 trades with trade-journal. Sources: `docs/research/index-0dte-trade-management.md`.
 
-Replay, 20 sessions to 2026-11-04 (`docs/research/replay-2026-11.md`): before 11:30, 24 trades, profit factor 1.22. All day, the same rules lost. The old pullback-low stop allowed 7 trades in 20 sessions.
+Replay, 21 sessions to 2026-11-05 (`docs/research/replay-2026-11.md`): before 11:30, 98 trades, profit factor 1.36. Setup M made 51 of the 98. Random entries had a profit factor of 0.79. All day, the same rules lost.
 
 ## Applies to
 
@@ -33,8 +33,8 @@ If any input is missing or stale, do not enter.
 Run a strategy check on each completed 5-minute bar, from the entry start to the entry cutoff.
 
 1. Read the trend state, chop flag, extension, and volatility shift for each symbol (intraday-technicals).
-2. Test the filters. If one fails, stop here.
-3. Test setups A and B.
+2. Test the filters. If a filter fails, skip each setup it applies to.
+3. Test setups A and B, then setup M.
 4. On a signal, follow order-execution.
 
 | Window | Rule |
@@ -44,13 +44,15 @@ Run a strategy check on each completed 5-minute bar, from the entry start to the
 
 ## Filters
 
-All must pass:
+| Filter | Setups |
+| --- | --- |
+| The chop flag is false. | A, B, M |
+| index-pair-read does not say "disagrees". | A, B, M |
+| No no-trade condition is active. | A, B, M |
+| No volatility shift on the signal bar. | A, B |
+| Extension is within ±2.0 in the trade's direction. | A, B |
 
-1. The chop flag is false.
-2. No volatility shift on the signal bar.
-3. Extension is within ±2.0 in the trade's direction.
-4. index-pair-read does not say "disagrees".
-5. No no-trade condition is active.
+Setup M has no extension filter and no volatility-shift filter. Reason: on 2026-11-05 they blocked every bar of a one-way trend day.
 
 ## Setups
 
@@ -72,7 +74,14 @@ Strategy stop: the signal bar's low minus 0.1 × ATR. Reason: on 2026-11-04 the 
 
 Strategy stop: the signal bar's low minus 0.1 × ATR.
 
-**Both setups.** Skip the signal when the stop distance is under 0.3 × ATR or over 1.0 × ATR. Reason: under that, noise hits the stop; over that, the trade is not a scalp.
+**Setups A and B.** Skip the signal when the stop distance is under 0.3 × ATR or over 1.0 × ATR. Reason: under that, noise hits the stop; over that, the trade is not a scalp.
+
+**M. Momentum continuation.** Test it only when A and B give no signal.
+
+1. The trend state is `up`.
+2. The signal bar closes above EMA(9) and above the previous bar's high.
+
+Strategy stop: the signal bar's low minus 0.1 × ATR. Skip the signal when the stop distance is under 0.3 × ATR. There is no upper limit. Reason: on a trend day the signal bars are wide, and the bracket caps the loss.
 
 ## Strategy stop, invalidation, and target
 
@@ -82,6 +91,7 @@ Strategy stop: the signal bar's low minus 0.1 × ATR.
 | Fast move | Any trade 0.5 × ATR beyond the strategy stop. Exit at once. |
 | Invalidation, setup A | A 5-minute close below VWAP. |
 | Invalidation, setup B | A 5-minute close back below VWAP. |
+| Invalidation, setup M | A 5-minute close below EMA(9). |
 | Target, options | The bank price of the bracket (trade-management). There is no target on the underlying. |
 | Bracket values | Bank price: `entry + delta × 0.8 × ATR`. Strategy premium stop: `entry − delta × 0.8 × ATR`. Time stop: 30 minutes after the fill. |
 | Target, shares | `entry + 2 × stop distance` on the underlying. |
@@ -94,8 +104,8 @@ The goal: bank the gain when the move pauses. Get back in when the trend resumes
 
 | After | Same direction | Other direction (flip) |
 | --- | --- | --- |
-| A profitable exit | A new setup A or B, signal bar closing after the exit. For setup A, the pullback forms after the exit. | Setup B in the other direction, on a later bar than the exit. |
-| A losing exit | Wait 15 minutes. Then a new setup A or B. | Same as above. |
+| A profitable exit | A new setup A, B, or M, signal bar closing after the exit. For setup A, the pullback forms after the exit. | Setup B in the other direction, on a later bar than the exit. |
+| A losing exit | Setup M: a new setup M, signal bar closing after the exit. Setups A and B: wait 15 minutes, then a new setup A or B. | Same as above. |
 
 - Never re-enter or flip on the bar of the exit.
 - One flip per symbol per hour.
@@ -130,7 +140,9 @@ Supports `option` and `equity`. Use the first class in `ALLOWED_ASSET_CLASSES` t
 
 - Chop. The chop flag removes some of it.
 - Afternoons. The replay lost in every window after 11:30. Do not extend the window without a new replay.
-- Few trades. About 1 a morning. index-level-scalp adds most of the trades.
+- Fitting. Setup M was written on 2026-11-05, after that day's one-way drop. On the other 20 sessions, the replay gained $1,208 with M and $913 without it. Review M after its first 20 live trades.
+- Expensive premium. The replay used the normal implied volatility. On 2026-11-05 it was higher, so the replay overstates that day.
+- Trend ends. Setup M buys strength late in a move. The bracket and the 30-minute time stop limit the loss when the move stops.
 - Costs. A 0.02 spread on a 1.00 contract is 2% per round trip. Four round trips cost about 8% of the premium traded.
 - V-shaped reversals. The stop fires, then the price returns. Re-entry recovers some of it, at another spread.
 - News bars. The volatility-shift filter blocks the bar, not the move after it.
